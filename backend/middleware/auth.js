@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { verifySupabaseAccessToken } = require('../services/supabase_auth');
 
-// Protect routes - require authentication
+// Protect routes - require authentication (Supabase-only mode)
 exports.protect = async (req, res, next) => {
   try {
     let token;
@@ -25,22 +25,21 @@ exports.protect = async (req, res, next) => {
     }
 
     try {
-      // Verify token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      // Supabase-only mode: verify Supabase access token
+      const supabaseUser = await verifySupabaseAccessToken(token);
+      
+      // Attach lightweight user object with Supabase data
+      req.user = {
+        _id: supabaseUser.id,
+        id: supabaseUser.id,
+        name: supabaseUser.user_metadata?.full_name || supabaseUser.user_metadata?.name || (supabaseUser.email || '').split('@')[0] || 'User',
+        email: supabaseUser.email,
+        role: 'user',
+        authProvider: supabaseUser.app_metadata?.provider || 'supabase_oauth',
+        lastLogin: new Date(),
+        save: async () => {} // No-op for Supabase-only mode
+      };
 
-      // Get user from token
-      req.user = await User.findById(decoded.id);
-
-      if (!req.user) {
-        return res.status(401).json({
-          success: false,
-          message: 'No user found with this token'
-        });
-      }
-
-      // Update last login
-      req.user.lastLogin = new Date();
-      await req.user.save({ validateBeforeSave: false });
 
       next();
     } catch (err) {
@@ -67,37 +66,5 @@ exports.authorize = (...roles) => {
       });
     }
     next();
-  };
-};
-
-// Check if user owns resource or is admin
-exports.checkOwnership = (model) => {
-  return async (req, res, next) => {
-    try {
-      const resource = await model.findById(req.params.id);
-
-      if (!resource) {
-        return res.status(404).json({
-          success: false,
-          message: 'Resource not found'
-        });
-      }
-
-      // Check if user owns the resource
-      if (resource.user.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to access this resource'
-        });
-      }
-
-      req.resource = resource;
-      next();
-    } catch (err) {
-      res.status(500).json({
-        success: false,
-        message: 'Server error'
-      });
-    }
   };
 };

@@ -1,7 +1,15 @@
 class Food {
   String name;
   double calories;
-  // Add more nutrients if needed
+  String amountLabel;
+  double grams;
+  String? matchedReference;
 
-  Food({required this.name, required this.calories});
+  Food({
+    required this.name,
+    required this.calories,
+    this.amountLabel = 'Default',
+    this.grams = 0,
+    this.matchedReference,
+  });
 }

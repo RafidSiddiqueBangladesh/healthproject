@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is used for real-time exercise form and face tracking.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location access is needed to find nearby hospitals, medicine shops, and ambulances.</string>
 </dict>
 </plist>

@@ -1,16 +1,12 @@
 const express = require('express');
-const OpenAI = require('openai');
 const { protect } = require('../middleware/auth');
 const User = require('../models/User');
 const NutritionLog = require('../models/NutritionLog');
 const Exercise = require('../models/Exercise');
+const CookingInventoryItem = require('../models/CookingInventoryItem');
+const { openRouterJson } = require('../services/openrouter');
 
 const router = express.Router();
-
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
 
 // All routes require authentication
 router.use(protect);
@@ -71,30 +67,26 @@ Please provide:
 
 Format the response as a JSON object with keys: breakfast, lunch, dinner, snacks, advice`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: "You are a professional nutritionist providing personalized meal planning advice." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 1000,
-      temperature: 0.7
-    });
-
-    const aiResponse = completion.choices[0].message.content;
-
     try {
-      const routine = JSON.parse(aiResponse);
+      const routine = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          { role: 'system', content: 'You are a professional nutritionist providing personalized meal planning advice.' },
+          { role: 'user', content: prompt }
+        ],
+        maxTokens: 1000,
+        temperature: 0.7
+      });
+
       res.json({
         success: true,
         data: routine
       });
     } catch (parseError) {
-      // If AI doesn't return valid JSON, return as text
       res.json({
         success: true,
         data: {
-          routine: aiResponse,
+          routine: 'Unable to parse AI JSON response right now.',
           advice: "Please consult with a healthcare professional for personalized nutrition advice."
         }
       });
@@ -130,20 +122,17 @@ For each alternative, provide:
 
 Format as JSON array of objects with keys: name, reason, costComparison, preparation`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: "You are a nutrition expert suggesting healthy food alternatives." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 800,
-      temperature: 0.6
-    });
-
-    const aiResponse = completion.choices[0].message.content;
-
     try {
-      const alternatives = JSON.parse(aiResponse);
+      const alternatives = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          { role: 'system', content: 'You are a nutrition expert suggesting healthy food alternatives.' },
+          { role: 'user', content: prompt }
+        ],
+        maxTokens: 800,
+        temperature: 0.6
+      });
+
       res.json({
         success: true,
         data: alternatives
@@ -202,20 +191,17 @@ Provide 3-5 exercise recommendations with:
 
 Format as JSON array of objects with keys: name, type, sets, reps, duration, difficulty, benefits, safety`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: "You are a certified fitness trainer providing safe, effective exercise recommendations." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 1000,
-      temperature: 0.6
-    });
-
-    const aiResponse = completion.choices[0].message.content;
-
     try {
-      const recommendations = JSON.parse(aiResponse);
+      const recommendations = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          { role: 'system', content: 'You are a certified fitness trainer providing safe, effective exercise recommendations.' },
+          { role: 'user', content: prompt }
+        ],
+        maxTokens: 1000,
+        temperature: 0.6
+      });
+
       res.json({
         success: true,
         data: recommendations
@@ -279,20 +265,17 @@ Provide 3-5 actionable health insights with:
 
 Format as JSON array of objects with keys: type, recommendation, benefit, difficulty`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: "You are a health and wellness expert providing data-driven insights." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 800,
-      temperature: 0.5
-    });
-
-    const aiResponse = completion.choices[0].message.content;
-
     try {
-      const insights = JSON.parse(aiResponse);
+      const insights = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          { role: 'system', content: 'You are a health and wellness expert providing data-driven insights.' },
+          { role: 'user', content: prompt }
+        ],
+        maxTokens: 800,
+        temperature: 0.5
+      });
+
       res.json({
         success: true,
         data: insights
@@ -342,20 +325,17 @@ Suggest 2-3 recipes with:
 
 Format as JSON array of objects with keys: name, cuisine, ingredients, steps, nutrition, costTips`;
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: "You are a creative chef providing healthy, budget-friendly recipes." },
-        { role: "user", content: prompt }
-      ],
-      max_tokens: 1200,
-      temperature: 0.7
-    });
-
-    const aiResponse = completion.choices[0].message.content;
-
     try {
-      const suggestions = JSON.parse(aiResponse);
+      const suggestions = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          { role: 'system', content: 'You are a creative chef providing healthy, budget-friendly recipes.' },
+          { role: 'user', content: prompt }
+        ],
+        maxTokens: 1200,
+        temperature: 0.7
+      });
+
       res.json({
         success: true,
         data: suggestions
@@ -379,6 +359,89 @@ Format as JSON array of objects with keys: name, cuisine, ingredients, steps, nu
       success: false,
       message: 'Failed to generate cooking suggestions'
     });
+  }
+});
+
+// @desc    Build adaptive routine + alternatives from nutrition and cooking inventory
+// @route   GET /api/ai/adaptive-plan
+// @access  Private
+router.get('/adaptive-plan', async (req, res) => {
+  try {
+    const user = req.user;
+
+    const recentNutrition = await NutritionLog.find({
+      user: user._id,
+      date: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+    })
+      .populate('foods.food', 'name')
+      .sort({ date: -1 })
+      .limit(14);
+
+    const inventory = await CookingInventoryItem.find({ user: user._id })
+      .sort({ expiryAt: 1 })
+      .limit(40);
+
+    const nutritionContext = recentNutrition.map((log) => ({
+      meal: log.meal,
+      date: log.date,
+      totalCalories: log.totalNutrition.calories,
+      items: log.foods.map((f) => f.food?.name).filter(Boolean)
+    }));
+
+    const inventoryContext = inventory.map((item) => ({
+      name: item.name,
+      quantity: item.quantity,
+      unit: item.unit,
+      cost: item.cost,
+      expiryAt: item.expiryAt
+    }));
+
+    let plan;
+    try {
+      plan = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a nutrition and cooking planner. Return JSON with keys: dailyRoutine (array), smartAlternatives (array), tips (array). Prioritize low-cost and near-expiry ingredients and user goals.'
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              user: {
+                age: user.age,
+                bmi: user.bmi,
+                goals: user.fitnessGoals,
+                preferences: user.dietaryPreferences,
+                conditions: user.healthConditions
+              },
+              nutritionContext,
+              inventoryContext
+            })
+          }
+        ],
+        maxTokens: 1200,
+        temperature: 0.3
+      });
+    } catch (error) {
+      plan = {
+        dailyRoutine: [
+          { meal: 'Breakfast', suggestion: 'Oats with fruit and water' },
+          { meal: 'Lunch', suggestion: 'Rice, lentil, and seasonal vegetables' },
+          { meal: 'Dinner', suggestion: 'Lean protein with salad' }
+        ],
+        smartAlternatives: [
+          { from: 'Malta', to: 'Lemon', reason: 'Cheaper vitamin C source' },
+          { from: 'Chicken', to: 'Lentils', reason: 'Cost-effective protein' }
+        ],
+        tips: ['Use near-expiry items first', 'Track daily cost and calories together']
+      };
+    }
+
+    res.json({ success: true, data: plan });
+  } catch (error) {
+    console.error('Adaptive AI plan error:', error);
+    res.status(500).json({ success: false, message: 'Failed to generate adaptive AI plan' });
   }
 });
 

@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/exercise_provider.dart';
-import '../providers/user_provider.dart';
+import 'exercise_coach_screen.dart';
+import '../widgets/beautified_tab_heading.dart';
+import '../widgets/liquid_glass.dart';
 
 class ExerciseModule extends StatefulWidget {
   @override
@@ -12,19 +14,39 @@ class ExerciseModule extends StatefulWidget {
 class _ExerciseModuleState extends State<ExerciseModule> {
   Map<int, Timer?> _timers = {};
   Map<int, int> _remainingTime = {};
+  static const Map<String, String> _exerciseVideos = {
+    'Push-ups': 'https://www.youtube.com/embed/IODxDxX7oi4',
+    'Squats': 'https://www.youtube.com/embed/aclHkVaku9U',
+    'Jumping Jacks': 'https://www.youtube.com/embed/c4DAnQ6DtF8',
+  };
 
   @override
   void initState() {
     super.initState();
     final provider = Provider.of<ExerciseProvider>(context, listen: false);
     for (int i = 0; i < provider.exercises.length; i++) {
-      _remainingTime[i] = provider.exercises[i].duration * 60; // seconds
+      _remainingTime[i] = provider.exercises[i].duration * 60;
     }
   }
 
-  void _startTimer(int index) {
+  Future<void> _startTimer(int index) async {
     final provider = Provider.of<ExerciseProvider>(context, listen: false);
     if (_timers[index] != null) return;
+    final exercise = provider.exercises[index];
+    final url = _exerciseVideos[exercise.name] ?? 'https://www.youtube.com/embed/Fh7dMxZC4w4';
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ExerciseCoachScreen(
+          exerciseName: exercise.name,
+          youtubeUrl: url,
+        ),
+      ),
+    );
+
+    if (!mounted || _timers[index] != null) return;
+
     _timers[index] = Timer.periodic(Duration(seconds: 1), (timer) {
       setState(() {
         if (_remainingTime[index]! > 0) {
@@ -46,79 +68,76 @@ class _ExerciseModuleState extends State<ExerciseModule> {
       _timers[index]?.cancel();
       _timers[index] = null;
     });
+    _timers.values.forEach((timer) => timer?.cancel());
   }
 
   String _formatTime(int seconds) {
-    int min = seconds ~/ 60;
-    int sec = seconds % 60;
-    return '${min.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
-  }
-
-  @override
-  void dispose() {
-    _timers.values.forEach((timer) => timer?.cancel());
-    super.dispose();
+    int minutes = seconds ~/ 60;
+    int secs = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<ExerciseProvider>(context);
-
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: Text('🏋️ Exercise Module'),
-        backgroundColor: Colors.blue[700],
-      ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Colors.blue[100]!, Colors.purple[100]!],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
+        title: const BeautifiedTabHeading(
+          title: 'Exercise Module',
+          icon: Icons.fitness_center,
         ),
+      ),
+      body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.fromLTRB(16, 104, 16, 24),
           child: ListView.builder(
             itemCount: provider.exercises.length,
             itemBuilder: (context, index) {
               final exercise = provider.exercises[index];
-              bool isRunning = _timers[index] != null;
-              return Card(
-                margin: EdgeInsets.symmetric(vertical: 10),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    children: [
-                      ListTile(
-                        leading: Icon(Icons.fitness_center, color: Colors.blue),
-                        title: Text(exercise.name, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                        subtitle: Text('${exercise.description}\nDuration: ${exercise.duration} min', style: TextStyle(color: Colors.grey[700])),
-                      ),
-                      if (isRunning)
-                        Text(
-                          'Time Left: ${_formatTime(_remainingTime[index]!)}',
-                          style: TextStyle(fontSize: 20, color: Colors.red),
+              final isRunning = _timers[index] != null;
+              return LiquidGlassCard(
+                tint: const Color(0xFFCDE7FF),
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.fitness_center, color: Color(0xFFE3EEFF)),
+                      title: Text(
+                        exercise.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                          color: Colors.white,
                         ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          if (!isRunning)
-                            ElevatedButton(
-                              onPressed: () => _startTimer(index),
-                              child: Text('Start'),
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                            ),
-                          SizedBox(width: 10),
-                          ElevatedButton(
-                            onPressed: isRunning ? null : () => _completeExercise(index),
-                            child: Text('Done'),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                          ),
-                        ],
                       ),
-                    ],
-                  ),
+                      subtitle: Text(
+                        '${exercise.description}\nDuration: ${exercise.duration} min',
+                        style: const TextStyle(color: Color(0xDDECF1FF)),
+                      ),
+                    ),
+                    if (isRunning)
+                      Text(
+                        'Time Left: ${_formatTime(_remainingTime[index]!)}',
+                        style: const TextStyle(fontSize: 20, color: Color(0xFFFFD6D6)),
+                      ),
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        if (!isRunning)
+                          ElevatedButton(
+                            onPressed: () => _startTimer(index),
+                            child: const Text('Start'),
+                          ),
+                        const SizedBox(width: 10),
+                        ElevatedButton(
+                          onPressed: isRunning ? null : () => _completeExercise(index),
+                          child: const Text('Done'),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               );
             },

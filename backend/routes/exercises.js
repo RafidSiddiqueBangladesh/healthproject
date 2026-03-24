@@ -3,6 +3,7 @@ const { protect } = require('../middleware/auth');
 const Exercise = require('../models/Exercise');
 const ExerciseLog = require('../models/ExerciseLog');
 const User = require('../models/User');
+const { searchYouTubeVideos } = require('../services/youtube');
 
 const router = express.Router();
 
@@ -57,6 +58,31 @@ router.get('/', async (req, res) => {
       success: false,
       message: 'Failed to get exercises'
     });
+  }
+});
+
+// @desc    Search exercise videos from YouTube
+// @route   GET /api/exercises/youtube/search
+// @access  Private
+router.get('/youtube/search', async (req, res) => {
+  try {
+    const { q, maxResults = 8 } = req.query;
+    if (!q || !String(q).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'q query is required'
+      });
+    }
+
+    const videos = await searchYouTubeVideos({
+      query: `${q} exercise tutorial`,
+      maxResults: Number(maxResults) || 8
+    });
+
+    res.json({ success: true, data: videos });
+  } catch (error) {
+    console.error('Exercise YouTube search error:', error);
+    res.status(500).json({ success: false, message: 'Failed to search exercise videos' });
   }
 });
 

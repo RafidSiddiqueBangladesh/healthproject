@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import '../models/food.dart';
 
 class NutritionProvider with ChangeNotifier {
-  List<Food> _foods = [];
+  final List<Food> _foods = [];
 
-  List<Food> get foods => _foods;
+  List<Food> get foods => List<Food>.unmodifiable(_foods);
 
   double get totalCalories => _foods.fold(0.0, (sum, food) => sum + food.calories);
 

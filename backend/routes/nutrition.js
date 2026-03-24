@@ -1,10 +1,40 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const multer = require('multer');
+const fs = require('fs').promises;
+const path = require('path');
 const NutritionLog = require('../models/NutritionLog');
 const Food = require('../models/Food');
 const { protect } = require('../middleware/auth');
+const { openRouterJson } = require('../services/openrouter');
+const { parseFoodItemsFallback, estimateCalories } = require('../services/food_parser');
 
 const router = express.Router();
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, 'uploads/'),
+  filename: (req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `nutrition-${uniqueSuffix}${path.extname(file.originalname)}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) return cb(null, true);
+    return cb(new Error('Only image files are allowed'));
+  }
+});
+
+async function ensureUploadsDir() {
+  try {
+    await fs.access('uploads/');
+  } catch (error) {
+    await fs.mkdir('uploads/');
+  }
+}
 
 // All routes require authentication
 router.use(protect);
@@ -109,6 +139,311 @@ router.get('/food-chart', async (req, res) => {
       success: false,
       message: 'Server error'
     });
+  }
+});
+
+// @desc    Parse voice transcript into structured food list
+// @route   POST /api/nutrition/voice/parse
+// @access  Private
+router.post('/voice/parse', async (req, res) => {
+  try {
+    const { transcript = '' } = req.body;
+
+    if (!transcript.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'transcript is required'
+      });
+    }
+
+    let items;
+    try {
+      items = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          {
+            role: 'system',
+            content: 'Convert the spoken food text (Bangla or English) into strict JSON array: [{"name":"","quantity":number,"unit":"piece|g|kg|cup|slice|default","grams":number,"calories":number|null}]. If amount is missing set quantity=1, unit="default", grams=100. Return only JSON.'
+          },
+          { role: 'user', content: transcript }
+        ],
+        temperature: 0.1,
+        maxTokens: 800
+      });
+    } catch (error) {
+      items = parseFoodItemsFallback(transcript);
+    }
+
+    const normalizedItems = normalizeParsedItems(items);
+
+    res.json({
+      success: true,
+      data: {
+        transcript,
+        items: normalizedItems
+      }
+    });
+  } catch (error) {
+    console.error('Nutrition voice parse error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to parse nutrition voice data'
+    });
+  }
+});
+
+// @desc    Parse voice and save into nutrition logs
+// @route   POST /api/nutrition/voice/log
+// @access  Private
+router.post('/voice/log', async (req, res) => {
+  try {
+    const { transcript = '', meal = 'snacks', date } = req.body;
+    if (!transcript.trim()) {
+      return res.status(400).json({ success: false, message: 'transcript is required' });
+    }
+
+    let parsedItems;
+    try {
+      parsedItems = await openRouterJson({
+        model: process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          {
+            role: 'system',
+            content: 'Convert this spoken nutrition text into JSON array with fields name, quantity, unit, grams, calories. If amount missing default quantity=1, unit=default, grams=100.'
+          },
+          { role: 'user', content: transcript }
+        ],
+        temperature: 0.1,
+        maxTokens: 800
+      });
+    } catch (error) {
+      parsedItems = parseFoodItemsFallback(transcript);
+    }
+
+    const normalizedItems = normalizeParsedItems(parsedItems);
+    const log = await createNutritionLogFromItems({
+      userId: req.user._id,
+      meal,
+      date,
+      items: normalizedItems,
+      inputMethod: 'voice',
+      voiceTranscript: transcript
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Voice nutrition log created',
+      data: log
+    });
+  } catch (error) {
+    console.error('Nutrition voice log error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save voice nutrition log'
+    });
+  }
+});
+
+// @desc    Parse screenshot and return food list
+// @route   POST /api/nutrition/ocr/parse
+// @access  Private
+router.post('/ocr/parse', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'image is required' });
+    }
+
+    const imageBuffer = await fs.readFile(req.file.path);
+    const base64 = imageBuffer.toString('base64');
+
+    let parsedItems;
+    try {
+      parsedItems = await openRouterJson({
+        model: process.env.OPENROUTER_VISION_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          {
+            role: 'system',
+            content: 'Read this image and return nutrition entry JSON array with fields name, quantity, unit, grams, calories. If quantity is missing set quantity=1, unit=default, grams=100. Return JSON only.'
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Extract food items and amounts from this image.' },
+              { type: 'image_url', image_url: { url: `data:${req.file.mimetype};base64,${base64}` } }
+            ]
+          }
+        ],
+        maxTokens: 1200
+      });
+    } finally {
+      await fs.unlink(req.file.path);
+    }
+
+    const normalizedItems = normalizeParsedItems(parsedItems);
+    res.json({ success: true, data: { items: normalizedItems } });
+  } catch (error) {
+    console.error('Nutrition OCR parse error:', error);
+
+    if (req.file?.path) {
+      try {
+        await fs.unlink(req.file.path);
+      } catch (cleanupError) {
+        console.error('Nutrition OCR cleanup error:', cleanupError);
+      }
+    }
+
+    res.status(500).json({ success: false, message: 'Failed to parse nutrition screenshot' });
+  }
+});
+
+// @desc    Parse screenshot and save nutrition log
+// @route   POST /api/nutrition/ocr/log
+// @access  Private
+router.post('/ocr/log', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'image is required' });
+    }
+
+    const { meal = 'snacks', date } = req.body;
+    const imageBuffer = await fs.readFile(req.file.path);
+    const base64 = imageBuffer.toString('base64');
+
+    let parsedItems;
+    try {
+      parsedItems = await openRouterJson({
+        model: process.env.OPENROUTER_VISION_MODEL || 'google/gemini-2.0-flash-lite-001',
+        messages: [
+          {
+            role: 'system',
+            content: 'Read this food image and return strict JSON array with fields name, quantity, unit, grams, calories. Missing amount should default to quantity=1, unit=default, grams=100.'
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Extract nutrition log items from this image.' },
+              { type: 'image_url', image_url: { url: `data:${req.file.mimetype};base64,${base64}` } }
+            ]
+          }
+        ],
+        maxTokens: 1200
+      });
+    } finally {
+      await fs.unlink(req.file.path);
+    }
+
+    const normalizedItems = normalizeParsedItems(parsedItems);
+    const log = await createNutritionLogFromItems({
+      userId: req.user._id,
+      meal,
+      date,
+      items: normalizedItems,
+      inputMethod: 'ocr',
+      ocrImage: req.file.filename
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'OCR nutrition log created',
+      data: log
+    });
+  } catch (error) {
+    console.error('Nutrition OCR log error:', error);
+
+    if (req.file?.path) {
+      try {
+        await fs.unlink(req.file.path);
+      } catch (cleanupError) {
+        console.error('Nutrition OCR cleanup error:', cleanupError);
+      }
+    }
+
+    res.status(500).json({ success: false, message: 'Failed to save OCR nutrition log' });
+  }
+});
+
+// @desc    Save pre-parsed nutrition items from frontend
+// @route   POST /api/nutrition/items/log
+// @access  Private
+router.post('/items/log', async (req, res) => {
+  try {
+    const { items = [], meal = 'snacks', date, inputMethod = 'manual', voiceTranscript = '', ocrImage = '' } = req.body;
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'items array is required'
+      });
+    }
+
+    const normalizedItems = normalizeParsedItems(items);
+
+    const log = await createNutritionLogFromItems({
+      userId: req.user._id,
+      meal,
+      date,
+      items: normalizedItems,
+      inputMethod,
+      voiceTranscript,
+      ocrImage
+    });
+
+    res.status(201).json({
+      success: true,
+      data: log,
+      message: 'Nutrition items saved'
+    });
+  } catch (error) {
+    console.error('Save nutrition items error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save nutrition items'
+    });
+  }
+});
+
+// @desc    Get calorie chart data for date range
+// @route   GET /api/nutrition/calorie-chart
+// @access  Private
+router.get('/calorie-chart', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 6 * 24 * 60 * 60 * 1000);
+
+    const logs = await NutritionLog.find({
+      user: req.user._id,
+      date: { $gte: start, $lte: end }
+    }).sort({ date: 1 });
+
+    const totalsByDate = {};
+    for (const log of logs) {
+      const key = new Date(log.date).toISOString().split('T')[0];
+      if (!totalsByDate[key]) {
+        totalsByDate[key] = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+      }
+      totalsByDate[key].calories += log.totalNutrition.calories || 0;
+      totalsByDate[key].protein += log.totalNutrition.protein || 0;
+      totalsByDate[key].carbs += log.totalNutrition.carbs || 0;
+      totalsByDate[key].fat += log.totalNutrition.fat || 0;
+    }
+
+    const chart = Object.entries(totalsByDate).map(([dateKey, totals]) => ({
+      date: dateKey,
+      calories: Number(totals.calories.toFixed(1)),
+      protein: Number(totals.protein.toFixed(1)),
+      carbs: Number(totals.carbs.toFixed(1)),
+      fat: Number(totals.fat.toFixed(1))
+    }));
+
+    res.json({
+      success: true,
+      data: chart
+    });
+  } catch (error) {
+    console.error('Calorie chart error:', error);
+    res.status(500).json({ success: false, message: 'Failed to build calorie chart' });
   }
 });
 
@@ -374,5 +709,113 @@ async function getFoodAlternatives(userId) {
     return [];
   }
 }
+
+function normalizeParsedItems(items) {
+  if (!Array.isArray(items)) return [];
+
+  return items
+    .filter((item) => item && item.name)
+    .map((item) => {
+      const name = String(item.name).trim();
+      const quantity = Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+      const unit = item.unit ? String(item.unit).toLowerCase() : 'default';
+      const grams = Number(item.grams) > 0 ? Number(item.grams) : unit === 'default' ? 100 : 100;
+      const calories = Number(item.calories) > 0 ? Number(item.calories) : estimateCalories(name, grams);
+
+      return {
+        name,
+        quantity,
+        unit,
+        grams,
+        calories: Number(calories.toFixed(1))
+      };
+    });
+}
+
+function inferCategory(name) {
+  const text = String(name || '').toLowerCase();
+
+  if (/(apple|banana|orange|mango|fruit)/i.test(text)) return 'fruits';
+  if (/(rice|bread|oat|noodle|grain|dal|lentil)/i.test(text)) return 'grains';
+  if (/(chicken|fish|egg|meat|beef|protein)/i.test(text)) return 'proteins';
+  if (/(milk|cheese|yogurt)/i.test(text)) return 'dairy';
+  if (/(potato|spinach|vegetable|salad|carrot)/i.test(text)) return 'vegetables';
+
+  return 'other';
+}
+
+async function findOrCreateFoodByName(item) {
+  const escapedName = item.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  let food = await Food.findOne({ name: { $regex: `^${escapedName}$`, $options: 'i' } });
+  if (food) return food;
+
+  food = await Food.create({
+    name: item.name,
+    category: inferCategory(item.name),
+    nutritionalInfo: {
+      calories: item.calories,
+      protein: Number((item.grams * 0.03).toFixed(1)),
+      carbs: Number((item.grams * 0.15).toFixed(1)),
+      fat: Number((item.grams * 0.02).toFixed(1)),
+      fiber: Number((item.grams * 0.02).toFixed(1)),
+      sugar: Number((item.grams * 0.01).toFixed(1)),
+      sodium: 0
+    },
+    servingSize: {
+      amount: item.grams || 100,
+      unit: 'g'
+    },
+    source: 'manual',
+    verified: false
+  });
+
+  return food;
+}
+
+async function createNutritionLogFromItems({ userId, meal, date, items, inputMethod, voiceTranscript = '', ocrImage = '' }) {
+  const safeMeal = ['breakfast', 'lunch', 'dinner', 'snacks'].includes(meal) ? meal : 'snacks';
+  const logDate = date ? new Date(date) : new Date();
+
+  const foods = [];
+  for (const item of items) {
+    const food = await findOrCreateFoodByName(item);
+
+    const grams = item.grams || 100;
+    const multiplier = grams / (food.servingSize.amount || 100);
+
+    foods.push({
+      food: food._id,
+      quantity: grams,
+      unit: 'g',
+      calories: Number((food.nutritionalInfo.calories * multiplier).toFixed(1)),
+      nutritionalInfo: {
+        protein: Number(((food.nutritionalInfo.protein || 0) * multiplier).toFixed(1)),
+        carbs: Number(((food.nutritionalInfo.carbs || 0) * multiplier).toFixed(1)),
+        fat: Number(((food.nutritionalInfo.fat || 0) * multiplier).toFixed(1)),
+        fiber: Number(((food.nutritionalInfo.fiber || 0) * multiplier).toFixed(1)),
+        sugar: Number(((food.nutritionalInfo.sugar || 0) * multiplier).toFixed(1)),
+        sodium: Number(((food.nutritionalInfo.sodium || 0) * multiplier).toFixed(1))
+      }
+    });
+  }
+
+  const log = await NutritionLog.create({
+    user: userId,
+    meal: safeMeal,
+    date: logDate,
+    foods,
+    inputMethod,
+    voiceTranscript,
+    ocrImage,
+    isCompleted: true
+  });
+
+  return NutritionLog.findById(log._id).populate('foods.food', 'name nutritionalInfo servingSize');
+}
+
+ensureUploadsDir().catch((error) => {
+  console.error('Failed to initialize uploads dir for nutrition route:', error);
+});
 
 module.exports = router;

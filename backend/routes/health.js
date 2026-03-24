@@ -1,6 +1,7 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
 const User = require('../models/User');
+const CostEntry = require('../models/CostEntry');
 
 const router = express.Router();
 
@@ -365,6 +366,84 @@ router.post('/emergency', async (req, res) => {
       success: false,
       message: 'Failed to process emergency request'
     });
+  }
+});
+
+// @desc    Add a health expense entry
+// @route   POST /api/health/costs
+// @access  Private
+router.post('/costs', async (req, res) => {
+  try {
+    const { type = 'daily', amount, currency = 'BDT', note = '', date } = req.body;
+
+    if (!['daily', 'monthly'].includes(type)) {
+      return res.status(400).json({ success: false, message: 'type must be daily or monthly' });
+    }
+
+    if (amount === undefined || Number(amount) < 0) {
+      return res.status(400).json({ success: false, message: 'Valid amount is required' });
+    }
+
+    const entry = await CostEntry.create({
+      user: req.user._id,
+      type,
+      amount: Number(amount),
+      currency,
+      note,
+      date: date ? new Date(date) : new Date()
+    });
+
+    res.status(201).json({ success: true, data: entry, message: 'Cost entry saved' });
+  } catch (error) {
+    console.error('Add health cost error:', error);
+    res.status(500).json({ success: false, message: 'Failed to save health cost' });
+  }
+});
+
+// @desc    Get health expense entries and totals
+// @route   GET /api/health/costs
+// @access  Private
+router.get('/costs', async (req, res) => {
+  try {
+    const { type, startDate, endDate } = req.query;
+    const query = { user: req.user._id };
+
+    if (type && ['daily', 'monthly'].includes(type)) {
+      query.type = type;
+    }
+
+    if (startDate || endDate) {
+      query.date = {};
+      if (startDate) query.date.$gte = new Date(startDate);
+      if (endDate) query.date.$lte = new Date(endDate);
+    }
+
+    const entries = await CostEntry.find(query).sort({ date: -1 }).limit(500);
+
+    const totals = entries.reduce(
+      (acc, entry) => {
+        acc.all += entry.amount;
+        if (entry.type === 'daily') acc.daily += entry.amount;
+        if (entry.type === 'monthly') acc.monthly += entry.amount;
+        return acc;
+      },
+      { all: 0, daily: 0, monthly: 0 }
+    );
+
+    res.json({
+      success: true,
+      data: {
+        entries,
+        totals: {
+          all: Number(totals.all.toFixed(2)),
+          daily: Number(totals.daily.toFixed(2)),
+          monthly: Number(totals.monthly.toFixed(2))
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get health costs error:', error);
+    res.status(500).json({ success: false, message: 'Failed to load health costs' });
   }
 });
 

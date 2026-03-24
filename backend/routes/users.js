@@ -1,6 +1,7 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
 const User = require('../models/User');
+const { uploadAvatar } = require('../middleware/upload');
 
 const router = express.Router();
 
@@ -172,7 +173,7 @@ router.delete('/account', async (req, res) => {
 // @desc    Upload profile picture
 // @route   POST /api/users/upload-avatar
 // @access  Private
-router.post('/upload-avatar', require('../middleware/upload').single('avatar'), async (req, res) => {
+router.post('/upload-avatar', uploadAvatar.single('avatar'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({

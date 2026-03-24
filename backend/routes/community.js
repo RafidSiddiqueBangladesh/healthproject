@@ -1,8 +1,40 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs').promises;
 const { protect } = require('../middleware/auth');
 const User = require('../models/User');
+const Message = require('../models/Message');
 
 const router = express.Router();
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, 'uploads/messages/'),
+  filename: (req, file, cb) => {
+    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    cb(null, `message-${uniqueSuffix}${path.extname(file.originalname)}`);
+  }
+});
+
+const messageUpload = multer({
+  storage,
+  limits: {
+    fileSize: 8 * 1024 * 1024,
+    files: 5
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) return cb(null, true);
+    return cb(new Error('Only image files are allowed'));
+  }
+});
+
+async function ensureMessageUploadsDir() {
+  try {
+    await fs.access('uploads/messages/');
+  } catch (error) {
+    await fs.mkdir('uploads/messages/', { recursive: true });
+  }
+}
 
 // All routes require authentication
 router.use(protect);
@@ -447,15 +479,22 @@ router.get('/achievements', async (req, res) => {
   }
 });
 
-// @desc    Send message to user
+// @desc    Send message to user (supports text + images)
 // @route   POST /api/community/messages
 // @access  Private
-router.post('/messages', async (req, res) => {
+router.post('/messages', messageUpload.array('images', 5), async (req, res) => {
   try {
-    const { recipientId, message } = req.body;
+    const { recipientId, text = '' } = req.body;
     const sender = req.user;
 
-    // Validate recipient exists
+    if (!recipientId) {
+      return res.status(400).json({ success: false, message: 'recipientId is required' });
+    }
+
+    if (!text.trim() && (!req.files || req.files.length === 0)) {
+      return res.status(400).json({ success: false, message: 'Message text or image is required' });
+    }
+
     const recipient = await User.findById(recipientId);
     if (!recipient) {
       return res.status(404).json({
@@ -464,19 +503,22 @@ router.post('/messages', async (req, res) => {
       });
     }
 
-    // Mock message sending - in real app, this would save to messages collection
-    const messageData = {
-      id: Date.now().toString(),
-      senderId: sender._id,
-      recipientId,
-      message,
-      timestamp: new Date(),
-      read: false
-    };
+    const images = (req.files || []).map((file) => `/uploads/messages/${file.filename}`);
 
-    res.json({
+    const messageData = await Message.create({
+      sender: sender._id,
+      recipient: recipientId,
+      text: text.trim(),
+      images
+    });
+
+    const populated = await Message.findById(messageData._id)
+      .populate('sender', 'name avatar')
+      .populate('recipient', 'name avatar');
+
+    res.status(201).json({
       success: true,
-      data: messageData,
+      data: populated,
       message: 'Message sent successfully'
     });
   } catch (error) {
@@ -488,48 +530,51 @@ router.post('/messages', async (req, res) => {
   }
 });
 
-// @desc    Get messages
+// @desc    Get direct messages (conversation or inbox)
 // @route   GET /api/community/messages
 // @access  Private
 router.get('/messages', async (req, res) => {
   try {
-    const { limit = 20, page = 1 } = req.query;
-    const user = req.user;
+    const { limit = 20, page = 1, userId } = req.query;
+    const me = req.user._id;
+    const parsedLimit = Number(limit) || 20;
+    const parsedPage = Number(page) || 1;
 
-    // Mock messages - in real app, this would query messages collection
-    const mockMessages = [
-      {
-        id: '1',
-        sender: {
-          id: 'user1',
-          name: 'Sarah Johnson',
-          avatar: '/avatars/sarah.jpg'
-        },
-        message: 'Great job on your workout today! Keep it up! 💪',
-        timestamp: new Date(Date.now() - 1 * 60 * 60 * 1000),
-        read: false
-      },
-      {
-        id: '2',
-        sender: {
-          id: 'user2',
-          name: 'Mike Chen',
-          avatar: '/avatars/mike.jpg'
-        },
-        message: 'Thanks for sharing that recipe. Trying it tonight!',
-        timestamp: new Date(Date.now() - 3 * 60 * 60 * 1000),
-        read: true
-      }
-    ];
+    const baseQuery = userId
+      ? {
+          $or: [
+            { sender: me, recipient: userId },
+            { sender: userId, recipient: me }
+          ]
+        }
+      : {
+          $or: [{ sender: me }, { recipient: me }]
+        };
+
+    const messages = await Message.find(baseQuery)
+      .populate('sender', 'name avatar')
+      .populate('recipient', 'name avatar')
+      .sort({ createdAt: -1 })
+      .skip((parsedPage - 1) * parsedLimit)
+      .limit(parsedLimit);
+
+    const total = await Message.countDocuments(baseQuery);
+
+    if (userId) {
+      await Message.updateMany(
+        { sender: userId, recipient: me, readAt: null },
+        { $set: { readAt: new Date() } }
+      );
+    }
 
     res.json({
       success: true,
-      data: mockMessages,
+      data: messages,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total: mockMessages.length,
-        pages: Math.ceil(mockMessages.length / parseInt(limit))
+        page: parsedPage,
+        limit: parsedLimit,
+        total,
+        pages: Math.ceil(total / parsedLimit)
       }
     });
   } catch (error) {
@@ -539,6 +584,10 @@ router.get('/messages', async (req, res) => {
       message: 'Failed to get messages'
     });
   }
+});
+
+ensureMessageUploadsDir().catch((error) => {
+  console.error('Failed to initialize message uploads directory:', error);
 });
 
 module.exports = router;

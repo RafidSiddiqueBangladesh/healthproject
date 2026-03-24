@@ -22,9 +22,21 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: [true, 'Password is required'],
+    required: function() {
+      return !this.supabaseId;
+    },
     minlength: [6, 'Password must be at least 6 characters'],
     select: false // Don't include password in queries by default
+  },
+  authProvider: {
+    type: String,
+    enum: ['email', 'google', 'facebook', 'supabase_oauth'],
+    default: 'email'
+  },
+  supabaseId: {
+    type: String,
+    unique: true,
+    sparse: true
   },
   avatar: {
     type: String,
@@ -182,6 +194,9 @@ userSchema.pre('save', async function(next) {
 
 // Instance method to check password
 userSchema.methods.comparePassword = async function(candidatePassword) {
+  if (!this.password) {
+    return false;
+  }
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
