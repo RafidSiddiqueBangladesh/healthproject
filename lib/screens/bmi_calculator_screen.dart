@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:convert';
 import '../widgets/liquid_glass.dart';
 
 class BMICalculatorScreen extends StatefulWidget {
@@ -12,8 +15,11 @@ class _BMICalculatorScreenState extends State<BMICalculatorScreen> {
   double? _bmi;
   String _bmiCategory = '';
   String _suggestion = '';
+  bool _isSaving = false;
 
-  void _calculateBMI() {
+  static const String _apiBaseUrl = 'http://localhost:5000';
+
+  Future<void> _calculateBMI() async {
     double weight = double.tryParse(_weightController.text) ?? 0;
     double height = double.tryParse(_heightController.text) ?? 0;
     if (weight > 0 && height > 0) {
@@ -32,6 +38,57 @@ class _BMICalculatorScreenState extends State<BMICalculatorScreen> {
         _suggestion = 'Consult healthcare provider.';
       }
       setState(() {});
+      await _saveBmiToBackend(weight: weight, height: height, bmi: _bmi!);
+    }
+  }
+
+  Future<void> _saveBmiToBackend({
+    required double weight,
+    required double height,
+    required double bmi,
+  }) async {
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) return;
+
+      if (mounted) {
+        setState(() => _isSaving = true);
+      }
+
+      final response = await http.put(
+        Uri.parse('$_apiBaseUrl/api/profile/me'),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'heightCm': height,
+          'weightKg': weight,
+          'bmi': double.parse(bmi.toStringAsFixed(2)),
+        }),
+      );
+
+      if (mounted) {
+        if (response.statusCode == 200) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('BMI saved to your profile')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('BMI calculated but could not be saved')),
+          );
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('BMI calculated but save failed')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
     }
   }
 
@@ -99,11 +156,11 @@ class _BMICalculatorScreenState extends State<BMICalculatorScreen> {
                       ),
                       const SizedBox(height: 20),
                       ElevatedButton(
-                        onPressed: _calculateBMI,
+                        onPressed: _isSaving ? null : _calculateBMI,
                         style: ElevatedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 12),
                         ),
-                        child: const Text('Calculate BMI', style: TextStyle(fontSize: 16)),
+                        child: Text(_isSaving ? 'Saving...' : 'Calculate BMI', style: const TextStyle(fontSize: 16)),
                       ),
                       if (_bmi != null)
                         Padding(

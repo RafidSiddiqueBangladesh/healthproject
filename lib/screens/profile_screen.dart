@@ -27,6 +27,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   static const String _apiBaseUrl = 'http://localhost:5000';
 
+  String _messageSenderId(Map<String, dynamic> msg) {
+    final sender = (msg['sender'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+    return (sender['_id'] ?? sender['id'] ?? '').toString();
+  }
+
+  bool _isMyMessage(Map<String, dynamic> msg) {
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id ?? '';
+    if (currentUserId.isEmpty) return false;
+    return _messageSenderId(msg) == currentUserId;
+  }
+
   void _safeSetState(VoidCallback fn) {
     if (!mounted) return;
     setState(fn);
@@ -38,6 +49,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _nameController = TextEditingController(
       text: Provider.of<UserProvider>(context, listen: false).user.name,
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<UserProvider>().fetchUserProfile();
+    });
     _fetchAllData();
   }
 
@@ -635,20 +650,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       else if (_messages.isEmpty)
                         const Text('No messages yet', style: TextStyle(color: Color(0xFFE3F2FD)))
                       else
-                        ..._messages.take(5).map((msg) {
+                        ..._messages.take(8).map((msg) {
+                          final isMine = _isMyMessage(msg);
+                          final sender = (msg['sender'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
+                          final senderName = (sender['name'] ?? 'Unknown').toString();
+                          final messageText = (msg['text'] ?? '').toString();
+
                           return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(color: const Color(0x20FFFFFF), borderRadius: BorderRadius.circular(8)),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(msg['sender']['name'] ?? 'Unknown', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-                                  const SizedBox(height: 4),
-                                  Text(msg['text'] ?? '', style: const TextStyle(fontSize: 12, color: Color(0xFFE3F2FD)), maxLines: 2, overflow: TextOverflow.ellipsis),
-                                ],
-                              ),
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              mainAxisAlignment: isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
+                              children: [
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(maxWidth: 280),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                                    decoration: BoxDecoration(
+                                      color: isMine ? const Color(0xFF4C8CFF) : const Color(0x30FFFFFF),
+                                      borderRadius: BorderRadius.only(
+                                        topLeft: const Radius.circular(16),
+                                        topRight: const Radius.circular(16),
+                                        bottomLeft: Radius.circular(isMine ? 16 : 4),
+                                        bottomRight: Radius.circular(isMine ? 4 : 16),
+                                      ),
+                                      border: Border.all(
+                                        color: isMine ? const Color(0x80A5C7FF) : const Color(0x35FFFFFF),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          isMine ? 'You' : senderName,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: isMine ? const Color(0xFFD6E6FF) : const Color(0xFFE8F7FF),
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          messageText,
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            color: Colors.white,
+                                            height: 1.25,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           );
                         }),

@@ -12,6 +12,8 @@ async function searchYouTubeVideos({ query, maxResults = 5 }) {
       q: query,
       maxResults,
       type: 'video',
+      videoEmbeddable: 'true',
+      videoSyndicated: 'true',
       key: apiKey,
       safeSearch: 'moderate'
     },

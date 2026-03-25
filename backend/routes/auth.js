@@ -2,6 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const { protect } = require('../middleware/auth');
 const { verifySupabaseAccessToken } = require('../services/supabase_auth');
+const { getSupabaseAdmin } = require('../services/supabase_auth');
 
 const router = express.Router();
 
@@ -39,6 +40,21 @@ router.post('/supabase-login', async (req, res) => {
       supabaseUser.user_metadata?.full_name ||
       supabaseUser.user_metadata?.name ||
       email.split('@')[0];
+
+    // Ensure profile row exists for social features/discovery.
+    const supabase = getSupabaseAdmin();
+    if (supabase) {
+      await supabase.from('profiles').upsert(
+        {
+          id: supabaseUser.id,
+          email,
+          name: userName,
+          avatar_url: avatar || supabaseUser.user_metadata?.avatar_url || '',
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: 'id' }
+      );
+    }
 
     // Supabase-only mode: return user data directly without MongoDB
     return res.json({

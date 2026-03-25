@@ -22,7 +22,15 @@ function getAuthUser(req) {
 }
 
 function tableMissing(error) {
-  return error && (error.code === '42P01' || /relation .* does not exist/i.test(error.message || ''));
+  return !!(
+    error &&
+    (
+      error.code === '42P01' || // Postgres: relation does not exist
+      error.code === 'PGRST205' || // PostgREST: table not found in schema cache
+      /relation .* does not exist/i.test(error.message || '') ||
+      /could not find the table/i.test(error.message || '')
+    )
+  );
 }
 
 function mapProfile(row) {
@@ -133,6 +141,12 @@ router.put('/me', async (req, res) => {
       .single();
 
     if (error) {
+      if (tableMissing(error)) {
+        return res.status(503).json({
+          success: false,
+          message: 'Supabase tables are not initialized yet. Please run the SQL setup script (profiles, friendships, messages, nutrition_logs, cooking_items).'
+        });
+      }
       throw error;
     }
 
@@ -577,6 +591,233 @@ router.put('/messages/:id/read', async (req, res) => {
   } catch (error) {
     console.error('Mark message read error:', error);
     return res.status(500).json({ success: false, message: 'Failed to mark message as read' });
+  }
+});
+
+// @desc    Get nutrition logs for current user
+// @route   GET /api/profile/nutrition-logs
+// @access  Private
+router.get('/nutrition-logs', async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const authUser = getAuthUser(req);
+
+    const { data, error } = await supabase
+      .from('nutrition_logs')
+      .select('id, user_id, name, calories, amount_label, grams, matched_reference, created_at')
+      .eq('user_id', authUser.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      if (tableMissing(error)) return res.json({ success: true, data: [] });
+      throw error;
+    }
+
+    return res.json({
+      success: true,
+      data: (data || []).map((row) => ({
+        _id: row.id,
+        id: row.id,
+        name: row.name,
+        calories: row.calories,
+        amountLabel: row.amount_label,
+        grams: row.grams,
+        matchedReference: row.matched_reference,
+        createdAt: row.created_at
+      }))
+    });
+  } catch (error) {
+    console.error('Get nutrition logs error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to get nutrition logs' });
+  }
+});
+
+// @desc    Add nutrition log for current user
+// @route   POST /api/profile/nutrition-logs
+// @access  Private
+router.post('/nutrition-logs', async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const authUser = getAuthUser(req);
+    const { name, calories, amountLabel, grams, matchedReference } = req.body || {};
+
+    if (!name || calories == null) {
+      return res.status(400).json({ success: false, message: 'name and calories are required' });
+    }
+
+    const { data, error } = await supabase
+      .from('nutrition_logs')
+      .insert({
+        user_id: authUser.id,
+        name: String(name),
+        calories: Number(calories) || 0,
+        amount_label: amountLabel || 'Default',
+        grams: Number(grams) || 0,
+        matched_reference: matchedReference || null,
+        created_at: new Date().toISOString()
+      })
+      .select('id, name, calories, amount_label, grams, matched_reference, created_at')
+      .single();
+
+    if (error) throw error;
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        _id: data.id,
+        id: data.id,
+        name: data.name,
+        calories: data.calories,
+        amountLabel: data.amount_label,
+        grams: data.grams,
+        matchedReference: data.matched_reference,
+        createdAt: data.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Add nutrition log error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to add nutrition log' });
+  }
+});
+
+// @desc    Delete nutrition log for current user
+// @route   DELETE /api/profile/nutrition-logs/:id
+// @access  Private
+router.delete('/nutrition-logs/:id', async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const authUser = getAuthUser(req);
+
+    const { data, error } = await supabase
+      .from('nutrition_logs')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', authUser.id)
+      .select('id')
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, message: 'Nutrition log not found' });
+
+    return res.json({ success: true, message: 'Nutrition log deleted' });
+  } catch (error) {
+    console.error('Delete nutrition log error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to delete nutrition log' });
+  }
+});
+
+// @desc    Get cooking inventory for current user
+// @route   GET /api/profile/cooking-items
+// @access  Private
+router.get('/cooking-items', async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const authUser = getAuthUser(req);
+
+    const { data, error } = await supabase
+      .from('cooking_items')
+      .select('id, user_id, name, amount_label, price, entry_date, expiry_date, used_default_expiry, created_at')
+      .eq('user_id', authUser.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      if (tableMissing(error)) return res.json({ success: true, data: [] });
+      throw error;
+    }
+
+    return res.json({
+      success: true,
+      data: (data || []).map((row) => ({
+        _id: row.id,
+        id: row.id,
+        name: row.name,
+        amountLabel: row.amount_label,
+        price: row.price,
+        entryDate: row.entry_date,
+        expiryDate: row.expiry_date,
+        usedDefaultExpiry: row.used_default_expiry,
+        createdAt: row.created_at
+      }))
+    });
+  } catch (error) {
+    console.error('Get cooking items error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to get cooking items' });
+  }
+});
+
+// @desc    Add cooking inventory item for current user
+// @route   POST /api/profile/cooking-items
+// @access  Private
+router.post('/cooking-items', async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const authUser = getAuthUser(req);
+    const { name, amountLabel, price, entryDate, expiryDate, usedDefaultExpiry } = req.body || {};
+
+    if (!name) {
+      return res.status(400).json({ success: false, message: 'name is required' });
+    }
+
+    const { data, error } = await supabase
+      .from('cooking_items')
+      .insert({
+        user_id: authUser.id,
+        name: String(name),
+        amount_label: amountLabel || 'Default',
+        price: Number(price) || 0,
+        entry_date: entryDate || new Date().toISOString(),
+        expiry_date: expiryDate || new Date().toISOString(),
+        used_default_expiry: !!usedDefaultExpiry,
+        created_at: new Date().toISOString()
+      })
+      .select('id, name, amount_label, price, entry_date, expiry_date, used_default_expiry, created_at')
+      .single();
+
+    if (error) throw error;
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        _id: data.id,
+        id: data.id,
+        name: data.name,
+        amountLabel: data.amount_label,
+        price: data.price,
+        entryDate: data.entry_date,
+        expiryDate: data.expiry_date,
+        usedDefaultExpiry: data.used_default_expiry,
+        createdAt: data.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Add cooking item error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to add cooking item' });
+  }
+});
+
+// @desc    Delete cooking inventory item for current user
+// @route   DELETE /api/profile/cooking-items/:id
+// @access  Private
+router.delete('/cooking-items/:id', async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    const authUser = getAuthUser(req);
+
+    const { data, error } = await supabase
+      .from('cooking_items')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('user_id', authUser.id)
+      .select('id')
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return res.status(404).json({ success: false, message: 'Cooking item not found' });
+
+    return res.json({ success: true, message: 'Cooking item deleted' });
+  } catch (error) {
+    console.error('Delete cooking item error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to delete cooking item' });
   }
 });
 

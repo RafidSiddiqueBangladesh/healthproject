@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:ui_web' as ui_web;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:web/web.dart' as web;
+import 'package:webview_flutter/webview_flutter.dart';
 import '../providers/exercise_provider.dart';
 import 'exercise_coach_screen.dart';
 import '../widgets/beautified_tab_heading.dart';
@@ -14,10 +18,11 @@ class ExerciseModule extends StatefulWidget {
 class _ExerciseModuleState extends State<ExerciseModule> {
   Map<int, Timer?> _timers = {};
   Map<int, int> _remainingTime = {};
+  final Set<String> _registeredWebViewTypes = <String>{};
   static const Map<String, String> _exerciseVideos = {
-    'Push-ups': 'https://www.youtube.com/embed/IODxDxX7oi4',
-    'Squats': 'https://www.youtube.com/embed/aclHkVaku9U',
-    'Jumping Jacks': 'https://www.youtube.com/embed/c4DAnQ6DtF8',
+    'Push-ups': 'IODxDxX7oi4',
+    'Squats': 'aclHkVaku9U',
+    'Jumping Jacks': '2W4ZNSwoW_4',
   };
 
   @override
@@ -33,14 +38,14 @@ class _ExerciseModuleState extends State<ExerciseModule> {
     final provider = Provider.of<ExerciseProvider>(context, listen: false);
     if (_timers[index] != null) return;
     final exercise = provider.exercises[index];
-    final url = _exerciseVideos[exercise.name] ?? 'https://www.youtube.com/embed/Fh7dMxZC4w4';
+    final videoId = _exerciseVideos[exercise.name] ?? 'Fh7dMxZC4w4';
 
     await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ExerciseCoachScreen(
           exerciseName: exercise.name,
-          youtubeUrl: url,
+          youtubeUrl: 'https://www.youtube.com/embed/$videoId',
         ),
       ),
     );
@@ -77,6 +82,67 @@ class _ExerciseModuleState extends State<ExerciseModule> {
     return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
   }
 
+  Widget _buildVideoWidget(String videoId) {
+    if (kIsWeb) {
+      return _buildWebVideoWidget(videoId);
+    }
+
+    if (!kIsWeb) {
+      return Container(
+        height: 180,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.black,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: WebViewWidget(
+            controller: WebViewController()
+              ..setJavaScriptMode(JavaScriptMode.unrestricted)
+              ..loadRequest(
+                Uri.parse('https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0'),
+              ),
+          ),
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+
+  Widget _buildWebVideoWidget(String videoId) {
+    final viewType = 'exercise-youtube-$videoId';
+
+    if (!_registeredWebViewTypes.contains(viewType)) {
+      ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
+        final iframe = web.HTMLIFrameElement()
+          ..src = 'https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0'
+          ..style.border = '0'
+          ..style.width = '100%'
+          ..style.height = '100%'
+          ..allowFullscreen = true;
+        return iframe;
+      });
+      _registeredWebViewTypes.add(viewType);
+    }
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: HtmlElementView(viewType: viewType),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _timers.values.forEach((timer) => timer?.cancel());
+    super.dispose();
+  }
+
+
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<ExerciseProvider>(context);
@@ -90,57 +156,85 @@ class _ExerciseModuleState extends State<ExerciseModule> {
       ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 104, 16, 24),
-          child: ListView.builder(
-            itemCount: provider.exercises.length,
-            itemBuilder: (context, index) {
+          padding: const EdgeInsets.fromLTRB(12, 76, 12, 2),
+            child: SingleChildScrollView(
+              child: Column(
+                children: List.generate(provider.exercises.length, (index) {
               final exercise = provider.exercises[index];
               final isRunning = _timers[index] != null;
+              final videoId = _exerciseVideos[exercise.name] ?? 'Fh7dMxZC4w4';
+
               return LiquidGlassCard(
                 tint: const Color(0xFFCDE7FF),
-                margin: const EdgeInsets.symmetric(vertical: 10),
-                child: Column(
-                  children: [
-                    ListTile(
-                      leading: const Icon(Icons.fitness_center, color: Color(0xFFE3EEFF)),
-                      title: Text(
-                        exercise.name,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                          color: Colors.white,
-                        ),
-                      ),
-                      subtitle: Text(
-                        '${exercise.description}\nDuration: ${exercise.duration} min',
-                        style: const TextStyle(color: Color(0xDDECF1FF)),
+                margin: const EdgeInsets.symmetric(vertical: 2),
+                child: Padding(
+                  padding: const EdgeInsets.all(3),
+                  child: Column(
+                    children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.fitness_center, color: Color(0xFFE3EEFF), size: 16),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  exercise.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                Text(
+                                  'Duration: ${exercise.duration} min',
+                                  style: const TextStyle(color: Color(0xDDECF1FF), fontSize: 10),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                    const SizedBox(height: 3),
+                    _buildVideoWidget(videoId),
+                    const SizedBox(height: 2),
                     if (isRunning)
                       Text(
                         'Time Left: ${_formatTime(_remainingTime[index]!)}',
-                        style: const TextStyle(fontSize: 20, color: Color(0xFFFFD6D6)),
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFFFD6D6)),
                       ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 2),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         if (!isRunning)
-                          ElevatedButton(
-                            onPressed: () => _startTimer(index),
-                            child: const Text('Start'),
+                          SizedBox(
+                            height: 28,
+                            child: ElevatedButton(
+                              onPressed: () => _startTimer(index),
+                              child: const Text('Start Coach', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                            ),
                           ),
-                        const SizedBox(width: 10),
-                        ElevatedButton(
-                          onPressed: isRunning ? null : () => _completeExercise(index),
-                          child: const Text('Done'),
+                        const SizedBox(width: 4),
+                        SizedBox(
+                          height: 28,
+                          child: ElevatedButton(
+                            onPressed: isRunning ? null : () => _completeExercise(index),
+                            child: const Text('Mark Done', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                          ),
                         ),
                       ],
                     ),
-                  ],
+                    ],
+                  ),
                 ),
               );
-            },
+              }),
+            ),
           ),
         ),
       ),

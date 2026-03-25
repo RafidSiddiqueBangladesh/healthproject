@@ -13,6 +13,7 @@ dotenv.config();
 // Only auth and profile routes are available without MongoDB
 const authRoutes = require('./routes/auth');
 const profileRoutes = require('./routes/profile');
+const aiRoutes = require('./routes/ai');
 
 // TODO: Migrate these routes to use Supabase APIs
 // const userRoutes = require('./routes/users');
@@ -92,6 +93,7 @@ console.log('✅ Running in Supabase-only mode (MongoDB disabled).');
 // Routes (Supabase-only mode)
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/ai', aiRoutes);
 
 // TODO: Enable these routes after migrating to Supabase
 // app.use('/api/users', userRoutes);
@@ -99,7 +101,6 @@ app.use('/api/profile', profileRoutes);
 // app.use('/api/exercises', exerciseRoutes);
 // app.use('/api/health', healthRoutes);
 // app.use('/api/ocr', ocrRoutes);
-// app.use('/api/ai', aiRoutes);
 // app.use('/api/wearable', wearableRoutes);
 // app.use('/api/community', communityRoutes);
 // app.use('/api/cooking', cookingRoutes);

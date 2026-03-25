@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class CookingCostItem {
   const CookingCostItem({
@@ -39,35 +42,120 @@ class ManualCostEntry {
 class CostAnalysisProvider with ChangeNotifier {
   final List<CookingCostItem> _cookingItems = [];
   final List<ManualCostEntry> _manualEntries = [];
+  bool _isLoadingCookingItems = false;
+
+  static const String _apiBaseUrl = 'http://localhost:5000';
 
   List<CookingCostItem> get cookingItems => List.unmodifiable(_cookingItems);
   List<ManualCostEntry> get manualEntries => List.unmodifiable(_manualEntries);
+  bool get isLoadingCookingItems => _isLoadingCookingItems;
 
   String _nextId() => DateTime.now().microsecondsSinceEpoch.toString();
 
-  void addCookingItem({
+  Future<void> loadCookingItems() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+
+    _isLoadingCookingItems = true;
+    notifyListeners();
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/api/profile/cooking-items'),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body);
+        if (payload['success'] == true) {
+          final rows = List<Map<String, dynamic>>.from(payload['data'] ?? []);
+          _cookingItems
+            ..clear()
+            ..addAll(rows.map((row) => CookingCostItem(
+                  id: (row['id'] ?? row['_id']).toString(),
+                  name: (row['name'] ?? '').toString(),
+                  amountLabel: (row['amountLabel'] ?? 'Default').toString(),
+                  price: ((row['price'] ?? 0) as num).toDouble(),
+                  entryDate: DateTime.tryParse((row['entryDate'] ?? '').toString()) ?? DateTime.now(),
+                  expiryDate: DateTime.tryParse((row['expiryDate'] ?? '').toString()) ?? DateTime.now(),
+                  usedDefaultExpiry: row['usedDefaultExpiry'] == true,
+                )));
+        }
+      }
+    } finally {
+      _isLoadingCookingItems = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> addCookingItem({
     required String name,
     required String amountLabel,
     required double price,
     required DateTime entryDate,
     required DateTime expiryDate,
     required bool usedDefaultExpiry,
-  }) {
-    _cookingItems.add(
-      CookingCostItem(
-        id: _nextId(),
-        name: name,
-        amountLabel: amountLabel,
-        price: price,
-        entryDate: entryDate,
-        expiryDate: expiryDate,
-        usedDefaultExpiry: usedDefaultExpiry,
-      ),
+  }) async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+
+    final response = await http.post(
+      Uri.parse('$_apiBaseUrl/api/profile/cooking-items'),
+      headers: {
+        'Authorization': 'Bearer ${session.accessToken}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'name': name,
+        'amountLabel': amountLabel,
+        'price': price,
+        'entryDate': entryDate.toIso8601String(),
+        'expiryDate': expiryDate.toIso8601String(),
+        'usedDefaultExpiry': usedDefaultExpiry,
+      }),
     );
-    notifyListeners();
+
+    if (response.statusCode == 201 || response.statusCode == 200) {
+      final payload = jsonDecode(response.body);
+      final row = Map<String, dynamic>.from(payload['data'] ?? {});
+      _cookingItems.insert(
+        0,
+        CookingCostItem(
+          id: (row['id'] ?? row['_id']).toString(),
+          name: (row['name'] ?? name).toString(),
+          amountLabel: (row['amountLabel'] ?? amountLabel).toString(),
+          price: ((row['price'] ?? price) as num).toDouble(),
+          entryDate: DateTime.tryParse((row['entryDate'] ?? '').toString()) ?? entryDate,
+          expiryDate: DateTime.tryParse((row['expiryDate'] ?? '').toString()) ?? expiryDate,
+          usedDefaultExpiry: row['usedDefaultExpiry'] == true || usedDefaultExpiry,
+        ),
+      );
+      notifyListeners();
+      return;
+    }
+
+    throw Exception('Failed to save cooking item');
   }
 
-  void removeCookingItem(String id) {
+  Future<void> removeCookingItem(String id) async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+
+    final response = await http.delete(
+      Uri.parse('$_apiBaseUrl/api/profile/cooking-items/$id'),
+      headers: {
+        'Authorization': 'Bearer ${session.accessToken}',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to remove cooking item');
+    }
+
     _cookingItems.removeWhere((item) => item.id == id);
     notifyListeners();
   }

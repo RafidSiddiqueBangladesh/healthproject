@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:web/web.dart' as web;
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../widgets/exercise_guide_3d.dart';
@@ -22,6 +24,7 @@ class ExerciseCoachScreen extends StatefulWidget {
 
 class _ExerciseCoachScreenState extends State<ExerciseCoachScreen> {
   WebViewController? _webController;
+  String? _webViewType;
 
   @override
   void initState() {
@@ -30,7 +33,29 @@ class _ExerciseCoachScreenState extends State<ExerciseCoachScreen> {
       _webController = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..loadRequest(Uri.parse(widget.youtubeUrl));
+    } else {
+      final videoId = _extractVideoId(widget.youtubeUrl);
+      final viewType = 'coach-youtube-$videoId';
+      _webViewType = viewType;
+      ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
+        final iframe = web.HTMLIFrameElement()
+          ..src = 'https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0'
+          ..style.border = '0'
+          ..style.width = '100%'
+          ..style.height = '100%'
+          ..allowFullscreen = true;
+        return iframe;
+      });
     }
+  }
+
+  String _extractVideoId(String url) {
+    final uri = Uri.parse(url);
+    if (uri.pathSegments.contains('embed')) {
+      return uri.pathSegments.last;
+    }
+    final v = uri.queryParameters['v'];
+    return (v == null || v.isEmpty) ? '2W4ZNSwoW_4' : v;
   }
 
   Future<void> _openYoutube() async {
@@ -80,15 +105,9 @@ class _ExerciseCoachScreenState extends State<ExerciseCoachScreen> {
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(14),
                             child: kIsWeb
-                                ? Container(
-                                    color: const Color(0x22000000),
-                                    alignment: Alignment.center,
-                                    child: ElevatedButton.icon(
-                                      onPressed: _openYoutube,
-                                      icon: const Icon(Icons.open_in_new),
-                                      label: const Text('Open YouTube Video'),
-                                    ),
-                                  )
+                                ? (_webViewType == null
+                                    ? const Center(child: CircularProgressIndicator())
+                                    : HtmlElementView(viewType: _webViewType!))
                                 : (_webController == null
                                     ? const Center(child: CircularProgressIndicator())
                                     : WebViewWidget(controller: _webController!)),
@@ -104,7 +123,7 @@ class _ExerciseCoachScreenState extends State<ExerciseCoachScreen> {
                   child: ElevatedButton.icon(
                     onPressed: () => Navigator.pop(context),
                     icon: const Icon(Icons.play_circle_fill_rounded),
-                    label: const Text('Start Timer & Back to List'),
+                    label: const Text('Start Timer and Return to Exercise List'),
                   ),
                 ),
               ],
