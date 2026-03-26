@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/live_tracking_provider.dart';
+import '../services/health_result_service.dart';
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/exercise_guide_3d.dart';
 import '../widgets/full_camera_preview.dart';
@@ -21,6 +22,53 @@ class _LiveScreenState extends State<LiveScreen> {
   static const List<String> _exerciseNames = ['Push-ups', 'Squats', 'Jumping Jacks'];
   String _selectedExercise = 'Push-ups';
   LiveTrackingProvider? _trackingProvider;
+  bool _isSavingResult = false;
+  String _saveFeedback = '';
+
+  Future<void> _saveLiveSummary(LiveTrackingProvider tracking) async {
+    if (_isSavingResult) return;
+    final latest = tracking.latest;
+    setState(() {
+      _isSavingResult = true;
+      _saveFeedback = '';
+    });
+    try {
+      await HealthResultService.saveTrackingLog(
+        type: 'live_monitor',
+        label: '${latest.exerciseName} - ${latest.repCount} reps',
+        score: latest.formScore,
+        details: {
+          'exerciseName': latest.exerciseName,
+          'repCount': latest.repCount,
+          'formScore': latest.formScore,
+          'exerciseFeedback': latest.exerciseFeedback,
+          'faceDetected': latest.faceDetected,
+          'shoulderActive': latest.shoulderActive,
+          'handActive': latest.handActive,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _saveFeedback = 'Saved to health results.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Live tracking result saved to DB.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saveFeedback = 'Save failed. Please try again.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isSavingResult = false;
+      });
+    }
+  }
 
   @override
   void initState() {
@@ -61,7 +109,7 @@ class _LiveScreenState extends State<LiveScreen> {
       ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: ListView(
             children: [
               LiquidGlassCard(
@@ -214,6 +262,27 @@ class _LiveScreenState extends State<LiveScreen> {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: (tracking.isTracking || _isSavingResult)
+                            ? null
+                            : () => _saveLiveSummary(tracking),
+                        icon: _isSavingResult
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.save),
+                        label: Text(_isSavingResult ? 'Saving...' : 'Save Result to DB'),
+                      ),
+                    ),
+                    if (_saveFeedback.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(_saveFeedback, style: const TextStyle(fontSize: 12, color: Color(0xFFEAF3FF))),
+                    ],
                     if (tracking.errorMessage != null) ...[
                       const SizedBox(height: 10),
                       Text(

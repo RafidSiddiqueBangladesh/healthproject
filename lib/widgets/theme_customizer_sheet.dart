@@ -2,9 +2,58 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/theme_provider.dart';
+import '../services/mood_palette_service.dart';
 
-class ThemeCustomizerSheet extends StatelessWidget {
+class ThemeCustomizerSheet extends StatefulWidget {
   const ThemeCustomizerSheet({super.key});
+
+  @override
+  State<ThemeCustomizerSheet> createState() => _ThemeCustomizerSheetState();
+}
+
+class _ThemeCustomizerSheetState extends State<ThemeCustomizerSheet> {
+  static const List<String> _moods = ['Happy', 'Sad', 'Neutral', 'Astonished'];
+  String _editingMood = 'Neutral';
+  bool _isSwitchingMood = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadInitialMood();
+  }
+
+  Future<void> _loadInitialMood() async {
+    final mood = await MoodPaletteService.loadSelectedMood();
+    if (!mounted) return;
+    setState(() {
+      _editingMood = mood;
+    });
+  }
+
+  Future<void> _switchEditingMood(String mood, ThemeProvider theme) async {
+    if (_isSwitchingMood || mood == _editingMood) return;
+    setState(() {
+      _isSwitchingMood = true;
+      _editingMood = mood;
+    });
+
+    await MoodPaletteService.saveSelectedMood(mood);
+    final all = await MoodPaletteService.loadMoodThemes();
+    final selected = all[mood] ?? MoodPaletteService.defaultThemePreferences();
+
+    theme.applyThemeSnapshot(
+      isLight: selected['isLight'] == true,
+      primaryHue: (selected['primaryHue'] as num?)?.toDouble() ?? 220,
+      accentHue: (selected['accentHue'] as num?)?.toDouble() ?? 281,
+      orbHues: List<double>.from((selected['orbHues'] as List<dynamic>? ?? const <double>[263, 239, 276, 162, 24]).map((v) => (v as num).toDouble())),
+      persist: false,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _isSwitchingMood = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -26,6 +75,11 @@ class ThemeCustomizerSheet extends StatelessWidget {
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
                         ),
                       ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
                       SegmentedButton<bool>(
                         showSelectedIcon: false,
                         segments: const [
@@ -43,6 +97,29 @@ class ThemeCustomizerSheet extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 14),
+                  const Text('Mood Theme Editor', style: TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _moods
+                        .map(
+                          (mood) => ChoiceChip(
+                            label: Text(mood),
+                            selected: _editingMood == mood,
+                            onSelected: (_) => _switchEditingMood(mood, theme),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _isSwitchingMood
+                        ? 'Loading $_editingMood theme...'
+                        : 'Editing: $_editingMood (all changes save for this mood)',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
                   const Text('Presets', style: TextStyle(fontWeight: FontWeight.w600)),
                   const SizedBox(height: 10),
                   Wrap(
@@ -88,6 +165,15 @@ class ThemeCustomizerSheet extends StatelessWidget {
                       onPressed: theme.randomizeOrbs,
                       icon: const Icon(Icons.shuffle_rounded),
                       label: const Text('Randomize Background'),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      icon: const Icon(Icons.check_circle_outline_rounded),
+                      label: const Text('Done'),
                     ),
                   ),
                 ],

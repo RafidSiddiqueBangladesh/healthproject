@@ -1,6 +1,9 @@
 import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
+
+import '../services/mood_palette_service.dart';
 
 class ThemePreset {
   const ThemePreset({
@@ -19,7 +22,9 @@ class ThemePreset {
 }
 
 class ThemeProvider extends ChangeNotifier {
-  ThemeProvider();
+  ThemeProvider() {
+    unawaited(_restoreTheme());
+  }
 
   bool _isLight = false;
   Color _primary = const Color(0xFF7BA8FF);
@@ -36,6 +41,7 @@ class ThemeProvider extends ChangeNotifier {
   Color get primary => _primary;
   Color get accent => _accent;
   List<Color> get orbColors => List<Color>.unmodifiable(_orbColors);
+  Timer? _saveTimer;
 
   static const presets = <ThemePreset>[
     ThemePreset(
@@ -98,11 +104,13 @@ class ThemeProvider extends ChangeNotifier {
     _orbColors = List<Color>.from(preset.orbColors);
     _isLight = preset.isLight;
     notifyListeners();
+    _scheduleSave();
   }
 
   void toggleMode() {
     _isLight = !_isLight;
     notifyListeners();
+    _scheduleSave();
   }
 
   void updateOrbHue(int index, double hue) {
@@ -112,18 +120,25 @@ class ThemeProvider extends ChangeNotifier {
     final hsl = HSLColor.fromColor(_orbColors[index]);
     _orbColors[index] = hsl.withHue(hue).toColor().withValues(alpha: _orbColors[index].a);
     notifyListeners();
+    _scheduleSave();
   }
 
-  void updatePrimaryHue(double hue) {
+  void updatePrimaryHue(double hue, {bool persist = true}) {
     final hsl = HSLColor.fromColor(_primary);
     _primary = hsl.withHue(hue).toColor();
     notifyListeners();
+    if (persist) {
+      _scheduleSave();
+    }
   }
 
-  void updateAccentHue(double hue) {
+  void updateAccentHue(double hue, {bool persist = true}) {
     final hsl = HSLColor.fromColor(_accent);
     _accent = hsl.withHue(hue).toColor();
     notifyListeners();
+    if (persist) {
+      _scheduleSave();
+    }
   }
 
   void randomizeOrbs() {
@@ -133,6 +148,66 @@ class ThemeProvider extends ChangeNotifier {
       return HSLColor.fromAHSL(0.35, h, 0.88, _isLight ? 0.62 : 0.52).toColor();
     });
     notifyListeners();
+    _scheduleSave();
+  }
+
+  void applyThemeSnapshot({
+    required bool isLight,
+    required double primaryHue,
+    required double accentHue,
+    required List<double> orbHues,
+    bool persist = true,
+  }) {
+    _isLight = isLight;
+    _primary = HSLColor.fromColor(_primary).withHue(primaryHue).toColor();
+    _accent = HSLColor.fromColor(_accent).withHue(accentHue).toColor();
+
+    _orbColors = List<Color>.generate(_orbColors.length, (index) {
+      final source = _orbColors[index];
+      final hue = index < orbHues.length ? orbHues[index] : HSLColor.fromColor(source).hue;
+      return HSLColor.fromColor(source).withHue(hue).toColor().withValues(alpha: source.a);
+    });
+
+    notifyListeners();
+    if (persist) {
+      _scheduleSave();
+    }
+  }
+
+  Future<void> _restoreTheme() async {
+    final saved = await MoodPaletteService.loadThemePreferences();
+    final orbHues = List<double>.from(saved['orbHues'] as List<dynamic>? ?? const <double>[263, 239, 276, 162, 24]);
+
+    _isLight = saved['isLight'] == true;
+    _primary = HSLColor.fromColor(_primary).withHue((saved['primaryHue'] as num).toDouble()).toColor();
+    _accent = HSLColor.fromColor(_accent).withHue((saved['accentHue'] as num).toDouble()).toColor();
+
+    _orbColors = List<Color>.generate(_orbColors.length, (index) {
+      final hue = index < orbHues.length ? orbHues[index] : HSLColor.fromColor(_orbColors[index]).hue;
+      final source = _orbColors[index];
+      return HSLColor.fromColor(source).withHue(hue).toColor().withValues(alpha: source.a);
+    });
+
+    notifyListeners();
+  }
+
+  void _scheduleSave() {
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 300), () {
+      final payload = {
+        'isLight': _isLight,
+        'primaryHue': HSLColor.fromColor(_primary).hue,
+        'accentHue': HSLColor.fromColor(_accent).hue,
+        'orbHues': _orbColors.map((c) => HSLColor.fromColor(c).hue).toList(),
+      };
+      unawaited(MoodPaletteService.saveThemePreferences(payload));
+    });
+  }
+
+  @override
+  void dispose() {
+    _saveTimer?.cancel();
+    super.dispose();
   }
 
   ThemeData buildTheme() {

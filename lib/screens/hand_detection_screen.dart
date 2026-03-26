@@ -7,6 +7,8 @@ import 'dart:async';
 
 import '../services/mediapipe_web_bridge.dart';
 import '../services/ml_input_image.dart';
+import '../services/health_result_service.dart';
+import '../widgets/beautified_tab_heading.dart';
 import '../widgets/full_camera_preview.dart';
 import '../widgets/liquid_glass.dart';
 import '../widgets/web_camera_view.dart';
@@ -31,6 +33,53 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
   bool _rightHand = false;
   List<String> _missing = const [];
   String _status = 'Initializing camera...';
+  bool _isSavingResult = false;
+  String _saveFeedback = '';
+
+  Future<void> _saveCurrentResult() async {
+    if (_isSavingResult) return;
+
+    final label = (_leftHand || _rightHand) && _missing.isEmpty ? 'Hands/Fingers Detected' : 'Missing Hand Parts';
+
+    setState(() {
+      _isSavingResult = true;
+      _saveFeedback = '';
+    });
+
+    try {
+      await HealthResultService.saveTrackingLog(
+        type: 'hand_detection',
+        label: label,
+        score: _missing.isEmpty ? 1.0 : (1.0 - (_missing.length / 8.0)).clamp(0.0, 1.0).toDouble(),
+        details: {
+          'leftHand': _leftHand,
+          'rightHand': _rightHand,
+          'missing': _missing,
+          'status': _status,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _saveFeedback = 'Saved to health results.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hand result saved to DB.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saveFeedback = 'Save failed. Please try again.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isSavingResult = false;
+      });
+    }
+  }
 
   @override
   void initState() {
@@ -65,7 +114,20 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
       final front = cameras.where((c) => c.lensDirection == CameraLensDirection.front).toList();
       final selected = front.isNotEmpty ? front.first : cameras.first;
 
-      _cameraController = CameraController(selected, ResolutionPreset.high, enableAudio: false);
+      try {
+        _cameraController = CameraController(
+          selected,
+          ResolutionPreset.medium,
+          enableAudio: false,
+          imageFormatGroup: ImageFormatGroup.yuv420,
+        );
+      } catch (_) {
+        _cameraController = CameraController(
+          selected,
+          ResolutionPreset.medium,
+          enableAudio: false,
+        );
+      }
       await _cameraController!.initialize();
       _poseDetector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.stream));
 
@@ -147,8 +209,9 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
       final rightPinky = p.landmarks[PoseLandmarkType.rightPinky];
 
       final missing = <String>[];
-      bool leftHand = leftWrist != null;
-      bool rightHand = rightWrist != null;
+      // Detect hand only if wrist exists AND has valid position (not at frame edges)
+      bool leftHand = leftWrist != null && leftWrist.x > 10 && leftWrist.y > 10;
+      bool rightHand = rightWrist != null && rightWrist.x > 10 && rightWrist.y > 10;
 
       if (!leftHand) missing.add('left hand');
       if (!rightHand) missing.add('right hand');
@@ -166,10 +229,10 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
           _missing = missing;
         });
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         setState(() {
-          _status = 'Hand analysis failed on this runtime.';
+          _status = 'Hand analysis failed on this runtime: $e';
         });
       }
     } finally {
@@ -198,10 +261,15 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
 
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: AppBar(title: const Text('Hand Detection')),
+      appBar: AppBar(
+        title: const BeautifiedTabHeading(
+          title: 'Hand Detection',
+          icon: Icons.pan_tool_alt,
+        ),
+      ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: Column(
             children: [
               Expanded(
@@ -244,6 +312,25 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
                     ),
                     const SizedBox(height: 6),
                     Text(_status, style: const TextStyle(fontSize: 12, color: Color(0xD0EAF3FF))),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _isSavingResult ? null : _saveCurrentResult,
+                        icon: _isSavingResult
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.save),
+                        label: Text(_isSavingResult ? 'Saving...' : 'Save Result to DB'),
+                      ),
+                    ),
+                    if (_saveFeedback.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(_saveFeedback, style: const TextStyle(fontSize: 12, color: Color(0xFFEAF3FF))),
+                    ],
                   ],
                 ),
               ),

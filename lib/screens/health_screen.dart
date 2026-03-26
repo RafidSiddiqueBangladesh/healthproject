@@ -1,13 +1,44 @@
 import 'package:flutter/material.dart';
+import '../services/health_result_service.dart';
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
 import 'live_tracking_options_screen.dart';
 import 'bmi_calculator_screen.dart';
 import 'doctor_booking_screen.dart';
+import 'health_results_screen.dart';
+import 'health_suggestions_screen.dart';
 import 'service_map_screen.dart';
 
-class HealthMonitoring extends StatelessWidget {
+class HealthMonitoring extends StatefulWidget {
   const HealthMonitoring({super.key});
+
+  @override
+  State<HealthMonitoring> createState() => _HealthMonitoringState();
+}
+
+class _HealthMonitoringState extends State<HealthMonitoring> {
+  String _userRole = 'patient';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRole();
+  }
+
+  Future<void> _loadRole() async {
+    try {
+      final role = await HealthResultService.fetchUserRole();
+      if (!mounted) return;
+      setState(() {
+        _userRole = role == 'doctor' ? 'doctor' : 'patient';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _userRole = 'patient';
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +52,7 @@ class HealthMonitoring extends StatelessWidget {
       ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: SingleChildScrollView(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -98,21 +129,39 @@ class HealthMonitoring extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 20),
-                ElevatedButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const DoctorBookingScreen()),
-                    );
-                  },
-                  icon: const Icon(Icons.video_call),
-                  label: const Text('Book Doctor Talk'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-                    textStyle: const TextStyle(fontSize: 18),
+                if (_userRole == 'doctor') ...[
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const DoctorBookingScreen()),
+                      );
+                    },
+                    icon: const Icon(Icons.video_call),
+                    label: const Text('Book Doctor Talk'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                      textStyle: const TextStyle(fontSize: 18),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 20),
+                  const SizedBox(height: 20),
+                ] else ...[
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const DoctorBookingScreen()),
+                      );
+                    },
+                    icon: const Icon(Icons.video_call),
+                    label: const Text('Doctor Calling'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                      textStyle: const TextStyle(fontSize: 18),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
                 ElevatedButton.icon(
                   onPressed: () {
                     Navigator.push(
@@ -137,6 +186,36 @@ class HealthMonitoring extends StatelessWidget {
                   },
                   icon: const Icon(Icons.calculate),
                   label: const Text('BMI Calculator'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                    textStyle: const TextStyle(fontSize: 18),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const HealthResultsScreen()),
+                    );
+                  },
+                  icon: const Icon(Icons.history),
+                  label: const Text('Health Results History'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                    textStyle: const TextStyle(fontSize: 18),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const HealthSuggestionsScreen()),
+                    );
+                  },
+                  icon: const Icon(Icons.auto_awesome),
+                  label: const Text('Mood Suggestions'),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                     textStyle: const TextStyle(fontSize: 18),

@@ -1,4 +1,3 @@
-import 'dart:ui_web' as ui_web;
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -7,9 +6,10 @@ import 'package:provider/provider.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:web/web.dart' as web;
 import 'package:webview_flutter/webview_flutter.dart';
 import '../providers/cost_analysis_provider.dart';
+import '../utils/web_iframe_registry.dart'
+  if (dart.library.html) '../utils/web_iframe_registry_web.dart' as web_iframe;
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
 
@@ -682,15 +682,7 @@ class _CookingScreenState extends State<CookingScreen> {
     final embedUrl = 'https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0';
 
     if (!_registeredWebViewTypes.contains(viewType)) {
-      ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
-        final iframe = web.HTMLIFrameElement()
-          ..src = embedUrl
-          ..style.border = '0'
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..allowFullscreen = true;
-        return iframe;
-      });
+      web_iframe.registerIFrame(viewType: viewType, src: embedUrl);
       _registeredWebViewTypes.add(viewType);
     }
 
@@ -721,7 +713,7 @@ class _CookingScreenState extends State<CookingScreen> {
       ),
       body: LiquidGlassBackground(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

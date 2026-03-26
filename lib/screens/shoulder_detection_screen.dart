@@ -7,6 +7,8 @@ import 'dart:async';
 
 import '../services/mediapipe_web_bridge.dart';
 import '../services/ml_input_image.dart';
+import '../services/health_result_service.dart';
+import '../widgets/beautified_tab_heading.dart';
 import '../widgets/full_camera_preview.dart';
 import '../widgets/liquid_glass.dart';
 import '../widgets/web_camera_view.dart';
@@ -33,6 +35,57 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
   double? _lastLeftY;
   double? _lastRightY;
   String _status = 'Initializing camera...';
+  bool _isSavingResult = false;
+  String _saveFeedback = '';
+  bool _shoulderCompatMode = false;
+  bool _shoulderFallbackTried = false;
+
+  Future<void> _saveCurrentResult() async {
+    if (_isSavingResult) return;
+
+    final label = (!_leftShoulder || !_rightShoulder)
+        ? 'Shoulders Missing'
+        : (_movement ? 'Movement Active' : 'Shoulders Detected');
+
+    setState(() {
+      _isSavingResult = true;
+      _saveFeedback = '';
+    });
+
+    try {
+      await HealthResultService.saveTrackingLog(
+        type: 'shoulder_detection',
+        label: label,
+        score: _movement ? 1.0 : ((_leftShoulder && _rightShoulder) ? 0.7 : 0.2),
+        details: {
+          'leftShoulder': _leftShoulder,
+          'rightShoulder': _rightShoulder,
+          'movement': _movement,
+          'status': _status,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _saveFeedback = 'Saved to health results.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Shoulder result saved to DB.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saveFeedback = 'Save failed. Please try again.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isSavingResult = false;
+      });
+    }
+  }
 
   @override
   void initState() {
@@ -67,7 +120,20 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
       final front = cameras.where((c) => c.lensDirection == CameraLensDirection.front).toList();
       final selected = front.isNotEmpty ? front.first : cameras.first;
 
-      _cameraController = CameraController(selected, ResolutionPreset.high, enableAudio: false);
+      try {
+        _cameraController = CameraController(
+          selected,
+          ResolutionPreset.medium,
+          enableAudio: false,
+          imageFormatGroup: ImageFormatGroup.yuv420,
+        );
+      } catch (_) {
+        _cameraController = CameraController(
+          selected,
+          ResolutionPreset.medium,
+          enableAudio: false,
+        );
+      }
       await _cameraController!.initialize();
       _poseDetector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.stream));
 
@@ -131,6 +197,9 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
             _leftShoulder = false;
             _rightShoulder = false;
             _movement = false;
+            _status = _shoulderCompatMode
+                ? 'No shoulder landmarks detected (compatibility mode).'
+                : 'No shoulder landmarks detected.';
           });
         }
         return;
@@ -156,12 +225,29 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
           _leftShoulder = left != null;
           _rightShoulder = right != null;
           _movement = movement;
+          _status = _shoulderCompatMode
+              ? 'Shoulder detection active (compatibility mode).'
+              : 'Shoulder detection active.';
         });
       }
-    } catch (_) {
+    } catch (e) {
+      if (!_shoulderFallbackTried && !kIsWeb) {
+        _shoulderFallbackTried = true;
+        try {
+          await _poseDetector?.close();
+          _poseDetector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.single));
+          if (mounted) {
+            setState(() {
+              _shoulderCompatMode = true;
+              _status = 'Switched shoulder detector to compatibility mode. Retrying...';
+            });
+          }
+          return;
+        } catch (_) {}
+      }
       if (mounted) {
         setState(() {
-          _status = 'Shoulder analysis failed on this runtime.';
+          _status = 'Shoulder analysis failed on this runtime: $e';
         });
       }
     } finally {
@@ -192,10 +278,15 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
 
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: AppBar(title: const Text('Shoulder Movement')),
+      appBar: AppBar(
+        title: const BeautifiedTabHeading(
+          title: 'Shoulder Movement',
+          icon: Icons.accessibility_new,
+        ),
+      ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: Column(
             children: [
               Expanded(
@@ -236,6 +327,25 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
                     Text(feedback, style: const TextStyle(color: Color(0xFFEAF3FF))),
                     const SizedBox(height: 6),
                     Text(_status, style: const TextStyle(fontSize: 12, color: Color(0xD0EAF3FF))),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _isSavingResult ? null : _saveCurrentResult,
+                        icon: _isSavingResult
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.save),
+                        label: Text(_isSavingResult ? 'Saving...' : 'Save Result to DB'),
+                      ),
+                    ),
+                    if (_saveFeedback.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(_saveFeedback, style: const TextStyle(fontSize: 12, color: Color(0xFFEAF3FF))),
+                    ],
                   ],
                 ),
               ),

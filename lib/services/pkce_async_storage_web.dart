@@ -1,5 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:web/web.dart' as web;
+import 'dart:html' as html;
 
 class _PkceWebStorage extends GotrueAsyncStorage {
   static const String _prefix = 'nutricare.pkce.';
@@ -8,17 +8,17 @@ class _PkceWebStorage extends GotrueAsyncStorage {
 
   @override
   Future<String?> getItem({required String key}) async {
-    return web.window.localStorage.getItem(_scopedKey(key));
+    return html.window.localStorage[_scopedKey(key)];
   }
 
   @override
   Future<void> removeItem({required String key}) async {
-    web.window.localStorage.removeItem(_scopedKey(key));
+    html.window.localStorage.remove(_scopedKey(key));
   }
 
   @override
   Future<void> setItem({required String key, required String value}) async {
-    web.window.localStorage.setItem(_scopedKey(key), value);
+    html.window.localStorage[_scopedKey(key)] = value;
   }
 }
 

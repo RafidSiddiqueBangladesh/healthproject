@@ -40,20 +40,40 @@ router.post('/supabase-login', async (req, res) => {
       supabaseUser.user_metadata?.full_name ||
       supabaseUser.user_metadata?.name ||
       email.split('@')[0];
+    const incomingAvatar =
+      (typeof avatar === 'string' && avatar.trim()) ||
+      (typeof supabaseUser.user_metadata?.avatar_url === 'string' && supabaseUser.user_metadata.avatar_url.trim()) ||
+      '';
 
     // Ensure profile row exists for social features/discovery.
     const supabase = getSupabaseAdmin();
+    let persistedAvatar = '';
     if (supabase) {
-      await supabase.from('profiles').upsert(
-        {
-          id: supabaseUser.id,
-          email,
-          name: userName,
-          avatar_url: avatar || supabaseUser.user_metadata?.avatar_url || '',
-          updated_at: new Date().toISOString()
-        },
-        { onConflict: 'id' }
-      );
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('avatar_url')
+        .eq('id', supabaseUser.id)
+        .maybeSingle();
+
+      persistedAvatar = (existingProfile?.avatar_url || '').trim();
+
+      const upsertPayload = {
+        id: supabaseUser.id,
+        email,
+        name: userName,
+        updated_at: new Date().toISOString()
+      };
+
+      // Never overwrite an existing stored avatar with an empty or stale auth value.
+      if (!persistedAvatar && incomingAvatar) {
+        upsertPayload.avatar_url = incomingAvatar;
+      }
+
+      await supabase.from('profiles').upsert(upsertPayload, { onConflict: 'id' });
+
+      if (!persistedAvatar && incomingAvatar) {
+        persistedAvatar = incomingAvatar;
+      }
     }
 
     // Supabase-only mode: return user data directly without MongoDB
@@ -65,7 +85,7 @@ router.post('/supabase-login', async (req, res) => {
         id: supabaseUser.id,
         name: userName,
         email,
-        avatar: avatar || supabaseUser.user_metadata?.avatar_url || '',
+        avatar: persistedAvatar || incomingAvatar || '',
         points: 0,
         authProvider: provider
       }
@@ -113,6 +133,18 @@ router.get('/me', protect, async (req, res) => {
  * @access  Private
  */
 router.get('/logout', protect, (req, res) => {
+  res.json({
+    success: true,
+    message: 'Logged out successfully. Frontend should clear Supabase session.'
+  });
+});
+
+/**
+ * Logout user (POST)
+ * @route   POST /api/auth/logout
+ * @access  Private
+ */
+router.post('/logout', protect, (req, res) => {
   res.json({
     success: true,
     message: 'Logged out successfully. Frontend should clear Supabase session.'

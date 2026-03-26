@@ -164,10 +164,15 @@
 
     const mouthWidth = Math.abs((rightMouth.x - leftMouth.x) || 0.001);
     const mouthOpen = Math.abs((bottomLip.y - topLip.y) || 0.001);
+    const mouthOpenRatio = mouthOpen / Math.max(mouthWidth, 0.001);
     const smileRatio = mouthWidth / Math.max(mouthOpen, 0.001);
 
     latest.face.faceDetected = true;
-    if (smileRatio > 8.2) {
+    // Priority rule: big mouth opening should be classified as Astonished.
+    if (mouthOpenRatio >= 0.23) {
+      latest.face.emotion = 'Astonished';
+      latest.face.advice = 'Surprised expression detected. Slow breathing can help you reset focus.';
+    } else if (smileRatio > 8.2) {
       latest.face.emotion = 'Happy';
       latest.face.advice = 'Great mood. Keep this positive energy.';
     } else if (smileRatio < 6.2) {

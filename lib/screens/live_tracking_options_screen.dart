@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
 import 'face_detection_screen.dart';
 import 'hand_detection_screen.dart';
@@ -13,10 +14,15 @@ class LiveTrackingOptionsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: AppBar(title: const Text('Tracking Options')),
+      appBar: AppBar(
+        title: const BeautifiedTabHeading(
+          title: 'Tracking Options',
+          icon: Icons.track_changes,
+        ),
+      ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: ListView(
             children: [
               const LiquidGlassCard(

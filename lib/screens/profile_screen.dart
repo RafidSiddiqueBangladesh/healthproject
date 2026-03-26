@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'auth_screen.dart';
 import '../providers/theme_provider.dart';
 import '../providers/user_provider.dart';
+import '../services/health_result_service.dart';
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
 
@@ -15,6 +19,8 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   late TextEditingController _nameController;
+  final ImagePicker _imagePicker = ImagePicker();
+  String? _profileAvatarUrl;
   bool _isEditing = false;
   List<Map<String, dynamic>> _friends = [];
   List<Map<String, dynamic>> _friendRequests = [];
@@ -24,8 +30,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isLoadingRequests = true;
   bool _isLoadingMessages = true;
   bool _isLoadingDiscoverUsers = true;
+  String _userRole = 'patient';
+  bool _isSavingUserRole = false;
 
   static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _chatImageMarker = '[image]';
 
   String _messageSenderId(Map<String, dynamic> msg) {
     final sender = (msg['sender'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
@@ -36,6 +45,68 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final currentUserId = Supabase.instance.client.auth.currentUser?.id ?? '';
     if (currentUserId.isEmpty) return false;
     return _messageSenderId(msg) == currentUserId;
+  }
+
+  String? _extractImageUrlFromMessageText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+
+    final lines = trimmed.split('\n').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    for (final line in lines) {
+      if (line.startsWith(_chatImageMarker)) {
+        final candidate = line.substring(_chatImageMarker.length).trim();
+        if (candidate.startsWith('http://') || candidate.startsWith('https://')) return candidate;
+      }
+    }
+
+    if ((trimmed.startsWith('http://') || trimmed.startsWith('https://')) &&
+        RegExp(r'\.(jpg|jpeg|png|gif|webp)(\?.*)?$', caseSensitive: false).hasMatch(trimmed)) {
+      return trimmed;
+    }
+
+    return null;
+  }
+
+  String _extractCaptionFromMessageText(String text) {
+    final lines = text
+        .split('\n')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty && !e.startsWith(_chatImageMarker))
+        .toList();
+    return lines.join('\n').trim();
+  }
+
+  Future<String?> _pickAndUploadChatImage() async {
+    final picked = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+      maxWidth: 1600,
+    );
+    if (picked == null) return null;
+
+    final bytes = await picked.readAsBytes();
+    final uid = Supabase.instance.client.auth.currentUser?.id;
+    if (uid == null || uid.isEmpty) return null;
+
+    final extMatch = RegExp(r'\.([a-zA-Z0-9]+)$').firstMatch(picked.name);
+    final ext = (extMatch?.group(1) ?? 'jpg').toLowerCase();
+    final fileName = '${DateTime.now().millisecondsSinceEpoch}.$ext';
+    final path = '$uid/messages/$fileName';
+    final contentType = (ext == 'png')
+        ? 'image/png'
+        : (ext == 'webp')
+            ? 'image/webp'
+            : 'image/jpeg';
+
+    await Supabase.instance.client.storage
+        .from('chat-images')
+        .uploadBinary(
+          path,
+          Uint8List.fromList(bytes),
+          fileOptions: FileOptions(upsert: false, contentType: contentType),
+        );
+
+    return Supabase.instance.client.storage.from('chat-images').getPublicUrl(path);
   }
 
   void _safeSetState(VoidCallback fn) {
@@ -52,17 +123,181 @@ class _ProfileScreenState extends State<ProfileScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<UserProvider>().fetchUserProfile();
+      _loadUserRole();
     });
     _fetchAllData();
   }
 
+  Future<void> _loadUserRole() async {
+    try {
+      final role = await HealthResultService.fetchUserRole();
+      if (!mounted) return;
+      _safeSetState(() {
+        _userRole = role == 'doctor' ? 'doctor' : 'patient';
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _saveUserRole(String role) async {
+    if (_isSavingUserRole) return;
+    if (_userRole == 'patient' && role == 'doctor') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Patient role is locked and cannot be changed to Doctor.')),
+      );
+      return;
+    }
+    final normalized = role == 'doctor' ? 'doctor' : 'patient';
+    _safeSetState(() {
+      _isSavingUserRole = true;
+    });
+    try {
+      await HealthResultService.saveUserRole(normalized);
+      if (!mounted) return;
+      _safeSetState(() {
+        _userRole = normalized;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Role updated to ${normalized == 'doctor' ? 'Doctor' : 'Patient'}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Role update failed: $e')));
+    } finally {
+      if (mounted) {
+        _safeSetState(() {
+          _isSavingUserRole = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _fetchProfileAvatar() async {
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) return;
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/api/profile/me'),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+      if (response.statusCode != 200) return;
+      final data = jsonDecode(response.body);
+      if (data['success'] != true) return;
+      final avatar = (data['data']?['avatar'] ?? '').toString();
+      if (avatar.isNotEmpty) {
+        _safeSetState(() {
+          _profileAvatarUrl = avatar;
+        });
+        context.read<UserProvider>().setAvatar(avatar);
+      }
+    } catch (_) {}
+  }
+
   Future<void> _fetchAllData() async {
+    await _fetchProfileAvatar();
     await _fetchFriends();
     await Future.wait([
       _fetchFriendRequests(),
       _fetchMessages(),
       _fetchDiscoverUsers(),
     ]);
+  }
+
+  Future<void> _uploadProfilePhoto() async {
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+        maxWidth: 1600,
+      );
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      final uid = Supabase.instance.client.auth.currentUser?.id;
+      if (uid == null || uid.isEmpty) return;
+
+      final extMatch = RegExp(r'\.([a-zA-Z0-9]+)$').firstMatch(picked.name);
+      final ext = (extMatch?.group(1) ?? 'jpg').toLowerCase();
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}.$ext';
+        final contentType = (ext == 'png')
+          ? 'image/png'
+          : (ext == 'webp')
+            ? 'image/webp'
+            : 'image/jpeg';
+
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) return;
+        final response = await http.post(
+          Uri.parse('$_apiBaseUrl/api/profile/upload-profile-image'),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+        },
+          body: jsonEncode({
+            'base64Image': base64Encode(bytes),
+            'mimeType': contentType,
+            'fileName': fileName,
+          }),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+          final body = jsonDecode(response.body);
+          final imageUrl = ((body['data'] ?? const {})['avatar'] ?? '').toString();
+        _safeSetState(() {
+            _profileAvatarUrl = imageUrl.isNotEmpty ? imageUrl : _profileAvatarUrl;
+        });
+        if (imageUrl.isNotEmpty) {
+          context.read<UserProvider>().setAvatar(imageUrl);
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Profile photo updated')),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Could not save profile photo (${response.statusCode})')),
+            );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Photo upload failed: $e'),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _logout() async {
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session != null) {
+        await http.post(
+          Uri.parse('$_apiBaseUrl/api/auth/logout'),
+          headers: {
+            'Authorization': 'Bearer ${session.accessToken}',
+            'Content-Type': 'application/json',
+          },
+        );
+      }
+    } catch (_) {
+      // Continue with client logout even if backend logout call fails.
+    } finally {
+      await Supabase.instance.client.auth.signOut();
+      if (!mounted) return;
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => AuthScreen()),
+        (route) => false,
+      );
+    }
   }
 
   Future<void> _fetchDiscoverUsers() async {
@@ -248,32 +483,82 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _openSendMessageDialog(String recipientId, String recipientName) async {
     final controller = TextEditingController();
+    String? uploadedImageUrl;
+    bool isUploadingImage = false;
+
     await showDialog<void>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: Text('Message $recipientName'),
-          content: TextField(
-            controller: controller,
-            decoration: const InputDecoration(hintText: 'Type your message...'),
-            maxLines: 4,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
+        return StatefulBuilder(builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Text('Message $recipientName'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  decoration: const InputDecoration(hintText: 'Type your message...'),
+                  maxLines: 4,
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: isUploadingImage
+                          ? null
+                          : () async {
+                              try {
+                                setDialogState(() => isUploadingImage = true);
+                                final url = await _pickAndUploadChatImage();
+                                setDialogState(() {
+                                  uploadedImageUrl = url;
+                                  isUploadingImage = false;
+                                });
+                              } catch (e) {
+                                setDialogState(() => isUploadingImage = false);
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Image upload failed: $e'),
+                                      duration: const Duration(seconds: 6),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                      icon: const Icon(Icons.image),
+                      label: Text(isUploadingImage ? 'Uploading...' : 'Add Image'),
+                    ),
+                  ],
+                ),
+                if (uploadedImageUrl != null) ...[
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.network(uploadedImageUrl!, height: 120, width: 120, fit: BoxFit.cover),
+                  ),
+                ],
+              ],
             ),
-            ElevatedButton(
-              onPressed: () async {
-                final message = controller.text.trim();
-                if (message.isEmpty) return;
-                Navigator.of(context).pop();
-                await _sendMessage(recipientId, message);
-              },
-              child: const Text('Send'),
-            )
-          ],
-        );
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final message = controller.text.trim();
+                  if (message.isEmpty && (uploadedImageUrl == null || uploadedImageUrl!.isEmpty)) {
+                    return;
+                  }
+                  Navigator.of(context).pop();
+                  await _sendMessage(recipientId, message, imageUrl: uploadedImageUrl);
+                },
+                child: const Text('Send'),
+              )
+            ],
+          );
+        });
       },
     );
     controller.dispose();
@@ -332,10 +617,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _sendMessage(String recipientId, String text) async {
+  Future<void> _sendMessage(String recipientId, String text, {String? imageUrl}) async {
     try {
       final session = Supabase.instance.client.auth.currentSession;
       if (session == null) return;
+
+      final normalizedText = text.trim();
+      final payloadText = imageUrl != null && imageUrl.isNotEmpty
+          ? (normalizedText.isEmpty ? '$_chatImageMarker$imageUrl' : '$normalizedText\n$_chatImageMarker$imageUrl')
+          : normalizedText;
 
       final response = await http.post(
         Uri.parse('$_apiBaseUrl/api/profile/messages'),
@@ -345,7 +635,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         },
         body: jsonEncode({
           'recipientId': recipientId,
-          'text': text,
+          'text': payloadText,
         }),
       );
 
@@ -380,6 +670,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       accent: themeProvider.accent,
     );
 
+    final effectiveAvatar = (_profileAvatarUrl != null && _profileAvatarUrl!.isNotEmpty)
+      ? _profileAvatarUrl!
+      : userProvider.user.avatar;
+
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
@@ -387,10 +681,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
           title: 'Profile',
           icon: Icons.person,
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Logout',
+            onPressed: _logout,
+            icon: const Icon(Icons.logout_rounded),
+          ),
+        ],
       ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: SingleChildScrollView(
             child: Column(
               children: [
@@ -402,10 +703,36 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          CircleAvatar(
-                            radius: 50,
-                            backgroundColor: const Color(0x39FFFFFF),
-                            child: const Icon(Icons.person, size: 50, color: Colors.white),
+                          Stack(
+                            children: [
+                              CircleAvatar(
+                                radius: 50,
+                                backgroundColor: const Color(0x39FFFFFF),
+                                backgroundImage: effectiveAvatar.isNotEmpty
+                                  ? NetworkImage(effectiveAvatar)
+                                    : null,
+                                child: effectiveAvatar.isEmpty
+                                    ? const Icon(Icons.person, size: 50, color: Colors.white)
+                                    : null,
+                              ),
+                              Positioned(
+                                right: 0,
+                                bottom: 0,
+                                child: InkWell(
+                                  onTap: _uploadProfilePhoto,
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(6),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xCC4C8CFF),
+                                      borderRadius: BorderRadius.circular(16),
+                                      border: Border.all(color: Colors.white70),
+                                    ),
+                                    child: const Icon(Icons.camera_alt, size: 14, color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(width: 20),
                           Expanded(
@@ -447,6 +774,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           ),
                         ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                LiquidGlassCard(
+                  tint: const Color(0xFFE8E2FF),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Account Role',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      const SizedBox(height: 10),
+                      SegmentedButton<String>(
+                        segments: const [
+                          ButtonSegment<String>(value: 'patient', label: Text('Patient / Parent'), icon: Icon(Icons.person)),
+                          ButtonSegment<String>(value: 'doctor', label: Text('Doctor'), icon: Icon(Icons.medical_services)),
+                        ],
+                        selected: <String>{_userRole},
+                        onSelectionChanged: _isSavingUserRole
+                            ? null
+                            : (selection) {
+                                final nextRole = selection.isEmpty ? 'patient' : selection.first;
+                                _saveUserRole(nextRole);
+                              },
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _isSavingUserRole
+                            ? 'Saving role...'
+                            : _userRole == 'patient'
+                                ? 'Patient role is permanent for this account. Doctor mode is disabled.'
+                                : 'Doctor role active. If changed to patient, it cannot be changed back.',
+                        style: const TextStyle(color: Color(0xFFE3F2FD), fontSize: 13),
                       ),
                     ],
                   ),
@@ -655,12 +1019,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           final sender = (msg['sender'] as Map<String, dynamic>?) ?? const <String, dynamic>{};
                           final senderName = (sender['name'] ?? 'Unknown').toString();
                           final messageText = (msg['text'] ?? '').toString();
+                          final imageUrl = _extractImageUrlFromMessageText(messageText);
+                          final caption = _extractCaptionFromMessageText(messageText);
 
+                          final avatarUrl = (sender['avatar'] ?? '').toString();
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 8),
                             child: Row(
                               mainAxisAlignment: isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
+                                if (!isMine) ...[
+                                  CircleAvatar(
+                                    radius: 14,
+                                    backgroundColor: const Color(0x35FFFFFF),
+                                    backgroundImage: avatarUrl.isNotEmpty ? NetworkImage(avatarUrl) : null,
+                                    child: avatarUrl.isEmpty
+                                        ? Text(
+                                            senderName.isNotEmpty ? senderName[0].toUpperCase() : '?',
+                                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                          )
+                                        : null,
+                                  ),
+                                  const SizedBox(width: 8),
+                                ],
                                 ConstrainedBox(
                                   constraints: const BoxConstraints(maxWidth: 280),
                                   child: Container(
@@ -681,23 +1063,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       crossAxisAlignment:
                                           isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          isMine ? 'You' : senderName,
-                                          style: TextStyle(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
-                                            color: isMine ? const Color(0xFFD6E6FF) : const Color(0xFFE8F7FF),
+                                        if (imageUrl != null) ...[
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(10),
+                                            child: Image.network(
+                                              imageUrl,
+                                              height: 150,
+                                              width: 220,
+                                              fit: BoxFit.cover,
+                                            ),
                                           ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          messageText,
-                                          style: const TextStyle(
-                                            fontSize: 13,
-                                            color: Colors.white,
-                                            height: 1.25,
+                                          if (caption.isNotEmpty) const SizedBox(height: 6),
+                                        ],
+                                        if (caption.isNotEmpty || imageUrl == null)
+                                          Text(
+                                            caption.isEmpty ? messageText : caption,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.white,
+                                              height: 1.25,
+                                            ),
                                           ),
-                                        ),
                                       ],
                                     ),
                                   ),

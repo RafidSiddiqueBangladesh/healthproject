@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
-import 'dart:ui_web' as ui_web;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:web/web.dart' as web;
 import 'package:webview_flutter/webview_flutter.dart';
+import '../utils/web_iframe_registry.dart'
+  if (dart.library.html) '../utils/web_iframe_registry_web.dart' as web_iframe;
 
 import '../widgets/exercise_guide_3d.dart';
 import '../widgets/liquid_glass.dart';
@@ -37,15 +37,10 @@ class _ExerciseCoachScreenState extends State<ExerciseCoachScreen> {
       final videoId = _extractVideoId(widget.youtubeUrl);
       final viewType = 'coach-youtube-$videoId';
       _webViewType = viewType;
-      ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
-        final iframe = web.HTMLIFrameElement()
-          ..src = 'https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0'
-          ..style.border = '0'
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..allowFullscreen = true;
-        return iframe;
-      });
+      web_iframe.registerIFrame(
+        viewType: viewType,
+        src: 'https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0',
+      );
     }
   }
 

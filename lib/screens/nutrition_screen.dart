@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import '../models/food.dart';
+import '../providers/cost_analysis_provider.dart';
 import '../providers/nutrition_provider.dart';
 import '../services/food_matcher.dart';
 import '../providers/user_provider.dart';
@@ -16,6 +18,30 @@ class FoodItem {
   final double price;
   
   FoodItem({required this.name, required this.price});
+}
+
+class RoutineSuggestion {
+  final String mealTime;
+  final String meal;
+  final String reason;
+
+  const RoutineSuggestion({
+    required this.mealTime,
+    required this.meal,
+    required this.reason,
+  });
+}
+
+class AlternativeSuggestion {
+  final String current;
+  final String suggested;
+  final String benefit;
+
+  const AlternativeSuggestion({
+    required this.current,
+    required this.suggested,
+    required this.benefit,
+  });
 }
 
 class NutritionTracker extends StatefulWidget {
@@ -31,8 +57,54 @@ class _NutritionTrackerState extends State<NutritionTracker> {
   final ImagePicker _imagePicker = ImagePicker();
   bool _isListening = false;
   bool _isAnalyzingImage = false;
+  bool _isGeneratingAiInsights = false;
   String _spokenText = '';
   String _selectedAmount = 'Default';
+  String _insightHeader = 'Demo AI plan shown. Add your foods/inventory for auto-updates.';
+  String _lastInsightSignature = '';
+  String _lastObservedSignature = '';
+
+  List<RoutineSuggestion> _routineSuggestions = const [
+    RoutineSuggestion(
+      mealTime: 'Breakfast',
+      meal: 'Oatmeal with banana and nuts',
+      reason: 'Steady morning energy and fiber.',
+    ),
+    RoutineSuggestion(
+      mealTime: 'Lunch',
+      meal: 'Rice with vegetables and lentils',
+      reason: 'Balanced carbs, micronutrients, and protein.',
+    ),
+    RoutineSuggestion(
+      mealTime: 'Dinner',
+      meal: 'Chicken or fish with salad',
+      reason: 'Light protein-focused evening meal.',
+    ),
+    RoutineSuggestion(
+      mealTime: 'Snack',
+      meal: 'Yogurt and seasonal fruit',
+      reason: 'Healthy snack with gut-friendly nutrients.',
+    ),
+  ];
+
+  List<AlternativeSuggestion> _alternativeSuggestions = const [
+    AlternativeSuggestion(
+      current: 'Malta',
+      suggested: 'Lemon',
+      benefit: 'Higher vitamin C per cost in many markets.',
+    ),
+    AlternativeSuggestion(
+      current: 'Chicken',
+      suggested: 'Lentils',
+      benefit: 'Budget-friendly protein swap for some meals.',
+    ),
+    AlternativeSuggestion(
+      current: 'Premium greens',
+      suggested: 'Spinach',
+      benefit: 'Reliable iron source at lower cost.',
+    ),
+  ];
+
   static const String _apiBaseUrl = 'http://localhost:5000';
 
   static const _amountOptions = <String>['Default', '1 piece', '1 cup', '100 g', '200 g', 'Custom grams', 'Custom pieces'];
@@ -41,9 +113,14 @@ class _NutritionTrackerState extends State<NutritionTracker> {
   void initState() {
     super.initState();
     _initSpeech();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      context.read<NutritionProvider>().loadFoods();
+      await Future.wait([
+        context.read<NutritionProvider>().loadFoods(),
+        context.read<CostAnalysisProvider>().loadCookingItems(),
+      ]);
+      if (!mounted) return;
+      await _maybeRefreshAiInsights(force: true);
     });
   }
 
@@ -51,12 +128,283 @@ class _NutritionTrackerState extends State<NutritionTracker> {
     await _speech.initialize();
   }
 
+  String _signatureFromData(List<Food> foods, List<CookingCostItem> inventory) {
+    final f = foods.map((e) => '${e.name.toLowerCase()}#${e.amountLabel.toLowerCase()}').join('|');
+    final c = inventory.map((e) => '${e.name.toLowerCase()}#${e.amountLabel.toLowerCase()}').join('|');
+    return 'foods:$f||inventory:$c';
+  }
+
+  String _stripMarkdownFences(String raw) {
+    var text = raw.trim();
+    if (text.startsWith('```')) {
+      final firstNewline = text.indexOf('\n');
+      if (firstNewline >= 0) {
+        text = text.substring(firstNewline + 1);
+      }
+      if (text.endsWith('```')) {
+        text = text.substring(0, text.length - 3).trim();
+      }
+    }
+    return text;
+  }
+
+  Map<String, dynamic>? _decodeObject(String raw) {
+    final cleaned = _stripMarkdownFences(raw);
+    try {
+      final decoded = jsonDecode(cleaned);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {}
+
+    final start = cleaned.indexOf('{');
+    final end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      final slice = cleaned.substring(start, end + 1);
+      try {
+        final decoded = jsonDecode(slice);
+        if (decoded is Map<String, dynamic>) return decoded;
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  List<RoutineSuggestion> _localRoutine(List<Food> foods, List<CookingCostItem> inventory) {
+    final foodNames = foods.map((e) => e.name).take(4).toList();
+    final inventoryNames = inventory.map((e) => e.name).take(4).toList();
+    final topFood = foodNames.isNotEmpty ? foodNames.first : 'fruits';
+    final topInventory = inventoryNames.isNotEmpty ? inventoryNames.first : 'vegetables';
+
+    return [
+      RoutineSuggestion(
+        mealTime: 'Breakfast',
+        meal: 'Use $topFood with oats or yogurt',
+        reason: 'Easy, quick start using your recent intake pattern.',
+      ),
+      RoutineSuggestion(
+        mealTime: 'Lunch',
+        meal: 'Rice with $topInventory and lentils',
+        reason: 'Uses available kitchen stock while staying balanced.',
+      ),
+      RoutineSuggestion(
+        mealTime: 'Dinner',
+        meal: 'Light protein with mixed salad',
+        reason: 'Supports recovery and avoids heavy late meals.',
+      ),
+      RoutineSuggestion(
+        mealTime: 'Snack',
+        meal: 'Seasonal fruit plus nuts',
+        reason: 'Low effort snack with better satiety.',
+      ),
+    ];
+  }
+
+  List<AlternativeSuggestion> _localAlternatives(List<Food> foods, List<CookingCostItem> inventory) {
+    final names = [
+      ...foods.map((e) => e.name.toLowerCase()),
+      ...inventory.map((e) => e.name.toLowerCase()),
+    ];
+
+    final suggestions = <AlternativeSuggestion>[];
+
+    if (names.any((n) => n.contains('chicken'))) {
+      suggestions.add(
+        const AlternativeSuggestion(
+          current: 'Chicken (daily)',
+          suggested: 'Lentils 2-3 days/week',
+          benefit: 'Reduces cost while keeping protein intake stable.',
+        ),
+      );
+    }
+
+    if (names.any((n) => n.contains('rice'))) {
+      suggestions.add(
+        const AlternativeSuggestion(
+          current: 'Large rice portion',
+          suggested: 'Half rice + extra vegetables',
+          benefit: 'Better fiber and easier calorie control.',
+        ),
+      );
+    }
+
+    if (names.any((n) => n.contains('banana') || n.contains('juice'))) {
+      suggestions.add(
+        const AlternativeSuggestion(
+          current: 'Packaged juice/snack',
+          suggested: 'Whole fruit + water',
+          benefit: 'Less sugar spikes and usually cheaper.',
+        ),
+      );
+    }
+
+    suggestions.addAll(const [
+      AlternativeSuggestion(
+        current: 'Expensive citrus',
+        suggested: 'Lemon',
+        benefit: 'Good vitamin C at lower average cost.',
+      ),
+      AlternativeSuggestion(
+        current: 'Processed snack',
+        suggested: 'Roasted chickpeas',
+        benefit: 'Higher protein and better fullness.',
+      ),
+    ]);
+
+    return suggestions.take(3).toList();
+  }
+
+  Future<void> _maybeRefreshAiInsights({bool force = false}) async {
+    if (!mounted || _isGeneratingAiInsights) return;
+
+    final nutritionProvider = context.read<NutritionProvider>();
+    final costProvider = context.read<CostAnalysisProvider>();
+    final foods = nutritionProvider.foods;
+    final inventory = costProvider.cookingItems;
+    final signature = _signatureFromData(foods, inventory);
+
+    if (!force && signature == _lastInsightSignature) return;
+    _lastInsightSignature = signature;
+
+    if (foods.isEmpty && inventory.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _insightHeader = 'Demo AI plan shown. Add your foods/inventory for auto-updates.';
+        _routineSuggestions = _localRoutine(const [], const []);
+        _alternativeSuggestions = _localAlternatives(const [], const []);
+      });
+      return;
+    }
+
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) {
+      if (!mounted) return;
+      setState(() {
+        _insightHeader = 'Smart plan based on your data (offline fallback).';
+        _routineSuggestions = _localRoutine(foods, inventory);
+        _alternativeSuggestions = _localAlternatives(foods, inventory);
+      });
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isGeneratingAiInsights = true;
+      });
+    }
+
+    try {
+      final foodLines = foods
+          .take(10)
+          .map((f) => '- ${f.name} (${f.amountLabel}, ${f.calories.toStringAsFixed(0)} kcal)')
+          .join('\n');
+      final inventoryLines = inventory
+          .take(10)
+          .map((i) => '- ${i.name} (${i.amountLabel}, ${i.price.toStringAsFixed(0)} taka)')
+          .join('\n');
+
+      final response = await http.post(
+        Uri.parse('$_apiBaseUrl/api/ai/chat'),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'messages': [
+            {
+              'role': 'system',
+              'content': 'You are a nutrition and budget meal planner. Always return JSON only.',
+            },
+            {
+              'role': 'user',
+              'content': 'Create a personalized daily routine and food alternatives from these logs. '
+                  'Return ONLY valid JSON with this schema: '
+                  '{"headline":"...", "routine":[{"mealTime":"Breakfast","meal":"...","reason":"..."}], '
+                  '"alternatives":[{"current":"...","suggested":"...","benefit":"..."}]} '
+                  'Rules: routine length 4, alternatives length 3, short actionable text, no markdown.\n\n'
+                  'Recent foods:\n$foodLines\n\nKitchen inventory:\n$inventoryLines',
+            },
+          ],
+          'temperature': 0.3,
+          'maxTokens': 600,
+        }),
+      ).timeout(const Duration(seconds: 16));
+
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body) as Map<String, dynamic>;
+        final text = ((payload['data'] ?? const {})['text'] ?? '').toString();
+        final map = _decodeObject(text);
+
+        if (map != null) {
+          final headline = (map['headline'] ?? '').toString().trim();
+          final routineJson = List<Map<String, dynamic>>.from(map['routine'] ?? const []);
+          final altJson = List<Map<String, dynamic>>.from(map['alternatives'] ?? const []);
+
+          final routine = routineJson
+              .map(
+                (e) => RoutineSuggestion(
+                  mealTime: (e['mealTime'] ?? 'Meal').toString(),
+                  meal: (e['meal'] ?? '').toString(),
+                  reason: (e['reason'] ?? '').toString(),
+                ),
+              )
+              .where((e) => e.meal.trim().isNotEmpty)
+              .take(4)
+              .toList();
+
+          final alternatives = altJson
+              .map(
+                (e) => AlternativeSuggestion(
+                  current: (e['current'] ?? '').toString(),
+                  suggested: (e['suggested'] ?? '').toString(),
+                  benefit: (e['benefit'] ?? '').toString(),
+                ),
+              )
+              .where((e) => e.current.trim().isNotEmpty && e.suggested.trim().isNotEmpty)
+              .take(3)
+              .toList();
+
+          if (mounted && routine.isNotEmpty && alternatives.isNotEmpty) {
+            setState(() {
+              _insightHeader = headline.isNotEmpty
+                  ? headline
+                  : 'AI updated your plan using nutrition and cooking entries.';
+              _routineSuggestions = routine;
+              _alternativeSuggestions = alternatives;
+            });
+            return;
+          }
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _insightHeader = 'Smart plan based on your data (fallback mode).';
+          _routineSuggestions = _localRoutine(foods, inventory);
+          _alternativeSuggestions = _localAlternatives(foods, inventory);
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _insightHeader = 'Smart plan based on your data (fallback mode).';
+          _routineSuggestions = _localRoutine(foods, inventory);
+          _alternativeSuggestions = _localAlternatives(foods, inventory);
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGeneratingAiInsights = false;
+        });
+      }
+    }
+  }
+
   Future<void> _addMultipleFoods(List<FoodItem> foodItems) async {
+    final provider = Provider.of<NutritionProvider>(context, listen: false);
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+
     for (final item in foodItems) {
       if (item.name.trim().isEmpty) continue;
-      
-      final provider = Provider.of<NutritionProvider>(context, listen: false);
-      final userProvider = Provider.of<UserProvider>(context, listen: false);
 
       double? customGrams;
       if (_selectedAmount == 'Custom grams') {
@@ -128,10 +476,12 @@ class _NutritionTrackerState extends State<NutritionTracker> {
         final foods = _parseMultipleFoods(_spokenText);
         if (foods.isNotEmpty) {
           await _addMultipleFoods(foods);
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Added ${foods.length} food item(s)')),
           );
         } else {
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Could not detect food and price pairs from voice input')),
           );
@@ -344,6 +694,7 @@ class _NutritionTrackerState extends State<NutritionTracker> {
         
         if (foods.isNotEmpty && mounted) {
           await _addMultipleFoods(foods);
+          if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Detected and added ${foods.length} food item(s)')),
           );
@@ -375,54 +726,17 @@ class _NutritionTrackerState extends State<NutritionTracker> {
     }
   }
 
-  Future<void> _addFoodEntry(String rawInput) async {
-    if (rawInput.trim().isEmpty) {
-      return;
-    }
-
-    final provider = Provider.of<NutritionProvider>(context, listen: false);
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
-
-    double? customGrams;
-    if (_selectedAmount == 'Custom grams') {
-      customGrams = double.tryParse(_gramsController.text.trim());
-    } else if (_selectedAmount == 'Custom pieces') {
-      // Convert pieces to grams (estimate: 1 piece ≈ 100g)
-      final pieces = double.tryParse(_piecesController.text.trim()) ?? 1;
-      customGrams = pieces * 100;
-    } else if (_selectedAmount == '1 piece') {
-      // 1 piece ≈ 100g
-      customGrams = 100;
-    }
-
-    final food = FoodMatcher.buildFoodFromInput(
-      input: rawInput,
-      amountOption: _selectedAmount,
-      customGrams: customGrams,
-    );
-
-    try {
-      await provider.addFood(food);
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not save food item to database')),
-        );
-      }
-      return;
-    }
-    userProvider.addPoints(5);
-    _controller.clear();
-    if (_selectedAmount == 'Custom grams') {
-      _gramsController.clear();
-    } else if (_selectedAmount == 'Custom pieces') {
-      _piecesController.clear();
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final provider = Provider.of<NutritionProvider>(context);
+    final costProvider = Provider.of<CostAnalysisProvider>(context);
+    final observedSignature = _signatureFromData(provider.foods, costProvider.cookingItems);
+    if (observedSignature != _lastObservedSignature) {
+      _lastObservedSignature = observedSignature;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _maybeRefreshAiInsights();
+      });
+    }
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -434,7 +748,7 @@ class _NutritionTrackerState extends State<NutritionTracker> {
       ),
       body: LiquidGlassBackground(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: Column(
             children: [
               LiquidGlassCard(
@@ -487,12 +801,14 @@ class _NutritionTrackerState extends State<NutritionTracker> {
                         const SizedBox(width: 10),
                         ElevatedButton(
                           onPressed: () async {
+                            final messenger = ScaffoldMessenger.of(context);
                             if (_controller.text.isNotEmpty) {
                               final foods = _parseMultipleFoods(_controller.text);
                               if (foods.isNotEmpty) {
                                 await _addMultipleFoods(foods);
-                                if (mounted && foods.length > 1) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
+                                if (!mounted) return;
+                                if (foods.length > 1) {
+                                  messenger.showSnackBar(
                                     SnackBar(content: Text('Added ${foods.length} food item(s)')),
                                   );
                                 }
@@ -587,60 +903,9 @@ class _NutritionTrackerState extends State<NutritionTracker> {
                 ),
               ),
               const SizedBox(height: 20),
-              LiquidGlassCard(
-                tint: const Color(0xFFAEEFFF),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.schedule, color: Colors.lightBlue[50], size: 30),
-                        const SizedBox(width: 10),
-                        const Text(
-                          'AI-Powered Daily Routine',
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 15),
-                    _buildRoutineItem('Breakfast', 'Oatmeal with fruits and nuts'),
-                    _buildRoutineItem('Lunch', 'Rice with vegetables and pulses'),
-                    _buildRoutineItem('Dinner', 'Fish or chicken with salad'),
-                    _buildRoutineItem('Snacks', 'Yogurt, fruits, and nuts'),
-                    const SizedBox(height: 15),
-                    const Text(
-                      'Tip: Stay hydrated and eat mindfully!',
-                      style: TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Color(0xFFD7F4FF)),
-                    ),
-                  ],
-                ),
-              ),
+              _buildDynamicRoutineCard(),
               const SizedBox(height: 20),
-              LiquidGlassCard(
-                tint: const Color(0xFFC8FFD6),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.swap_horiz, color: Colors.green[50], size: 30),
-                        const SizedBox(width: 10),
-                        const Text(
-                          'Smart Alternatives',
-                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 15),
-                    _buildAlternativeItem('Vitamin C', 'Lemon instead of Malta (cheaper and healthier)'),
-                    _buildAlternativeItem('Protein', 'Pulses instead of chicken (cost-effective)'),
-                    _buildAlternativeItem('Iron', 'Spinach instead of expensive greens'),
-                    const SizedBox(height: 15),
-                    const Text(
-                      'Save money while staying healthy!',
-                      style: TextStyle(fontSize: 14, fontStyle: FontStyle.italic, color: Color(0xFFD9FFE2)),
-                    ),
-                  ],
-                ),
-              ),
+              _buildDynamicAlternativesCard(),
               const SizedBox(height: 20),
               SizedBox(
                 height: 200,
@@ -662,14 +927,14 @@ class _NutritionTrackerState extends State<NutritionTracker> {
                         trailing: IconButton(
                           icon: const Icon(Icons.delete, color: Color(0xFFFFD5D5)),
                           onPressed: () async {
+                            final messenger = ScaffoldMessenger.of(context);
                             try {
                               await provider.removeFood(index);
                             } catch (_) {
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Could not delete food item')),
-                                );
-                              }
+                              if (!mounted) return;
+                              messenger.showSnackBar(
+                                const SnackBar(content: Text('Could not delete food item')),
+                              );
                             }
                           },
                         ),
@@ -685,28 +950,192 @@ class _NutritionTrackerState extends State<NutritionTracker> {
     );
   }
 
-  Widget _buildRoutineItem(String time, String meal) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5.0),
-      child: Row(
+  Widget _buildDynamicRoutineCard() {
+    return LiquidGlassCard(
+      tint: const Color(0xFFAEEFFF),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(time, style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFD9F4FF))),
-          const SizedBox(width: 10),
-          Expanded(child: Text(meal, style: const TextStyle(color: Color(0xF5FFFFFF)))),
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF5DE8FF), Color(0xFF0C8BD8)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: const Icon(Icons.auto_awesome, color: Colors.white),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'AI-Powered Daily Routine',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+              ),
+              if (_isGeneratingAiInsights)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0x2AFFFFFF),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0x45FFFFFF)),
+            ),
+            child: Text(
+              _insightHeader,
+              style: const TextStyle(
+                color: Color(0xFFE6FBFF),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          ..._routineSuggestions.map(
+            (item) => Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: const Color(0x22FFFFFF),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0x5C0457A9),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      item.mealTime,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.meal,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          item.reason,
+                          style: const TextStyle(color: Color(0xD6EEFBFF), fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildAlternativeItem(String nutrient, String alternative) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5.0),
-      child: Row(
+  Widget _buildDynamicAlternativesCard() {
+    return LiquidGlassCard(
+      tint: const Color(0xFFC8FFD6),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('$nutrient:', style: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFFDEFFE9))),
-          const SizedBox(width: 10),
-          Expanded(child: Text(alternative, style: const TextStyle(color: Color(0xF5FFFFFF)))),
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF92F18C), Color(0xFF1B9E67)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+                child: const Icon(Icons.swap_horiz_rounded, color: Colors.white),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Smart Alternatives',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ..._alternativeSuggestions.map(
+            (item) => Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                color: const Color(0x25FFFFFF),
+                border: Border.all(color: const Color(0x36FFFFFF)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  RichText(
+                    text: TextSpan(
+                      style: const TextStyle(color: Colors.white),
+                      children: [
+                        const TextSpan(
+                          text: 'Instead Of: ',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFE9FFE8)),
+                        ),
+                        TextSpan(text: item.current),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  RichText(
+                    text: TextSpan(
+                      style: const TextStyle(color: Colors.white),
+                      children: [
+                        const TextSpan(
+                          text: 'Try: ',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: Color(0xFFF1FFEE)),
+                        ),
+                        TextSpan(text: item.suggested),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    item.benefit,
+                    style: const TextStyle(color: Color(0xE6F3FFF4), fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );

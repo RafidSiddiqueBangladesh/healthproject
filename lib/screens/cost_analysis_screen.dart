@@ -16,51 +16,43 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
 
-  static const _periodOptions = <String>['This Month', 'This Year', 'Custom Range'];
+  static const _monthNames = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+
   static const _categoryOptions = <String>['All', 'Food', 'Nutrition'];
 
-  String _selectedPeriod = 'This Month';
+  late int _selectedMonth;
+  late int _selectedYear;
   String _selectedCategory = 'All';
   String _newCategory = 'Food';
   bool _includeCookingData = true;
   bool _includeManualData = true;
-  DateTime? _customStart;
-  DateTime? _customEnd;
   DateTime _newCostDate = DateTime.now();
 
-  DateTimeRange _activeRange() {
+  @override
+  void initState() {
+    super.initState();
     final now = DateTime.now();
-    if (_selectedPeriod == 'This Year') {
-      return DateTimeRange(
-        start: DateTime(now.year, 1, 1),
-        end: DateTime(now.year, 12, 31),
-      );
-    }
-    if (_selectedPeriod == 'Custom Range' && _customStart != null && _customEnd != null) {
-      return DateTimeRange(start: _customStart!, end: _customEnd!);
-    }
-    return DateTimeRange(
-      start: DateTime(now.year, now.month, 1),
-      end: DateTime(now.year, now.month + 1, 0),
-    );
-  }
+    _selectedMonth = now.month;
+    _selectedYear = now.year;
 
-  Future<void> _pickCustomRange() async {
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(now.year - 5, 1, 1),
-      lastDate: DateTime(now.year + 5, 12, 31),
-      initialDateRange: _customStart != null && _customEnd != null
-          ? DateTimeRange(start: _customStart!, end: _customEnd!)
-          : DateTimeRange(start: DateTime(now.year, now.month, 1), end: now),
-    );
-    if (picked != null) {
-      setState(() {
-        _customStart = picked.start;
-        _customEnd = picked.end;
-      });
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = context.read<CostAnalysisProvider>();
+      provider.loadCookingItems();
+      provider.loadManualCosts();
+    });
   }
 
   Future<void> _pickNewCostDate() async {
@@ -75,7 +67,7 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
     }
   }
 
-  void _addManualCost(BuildContext context) {
+  Future<void> _addManualCost(BuildContext context) async {
     final title = _titleController.text.trim();
     final amount = double.tryParse(_amountController.text.trim());
 
@@ -86,12 +78,20 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
       return;
     }
 
-    context.read<CostAnalysisProvider>().addManualCost(
-          title: title,
-          category: _newCategory,
-          amount: amount,
-          date: _newCostDate,
-        );
+    try {
+      await context.read<CostAnalysisProvider>().addManualCost(
+            title: title,
+            category: _newCategory,
+            amount: amount,
+            date: _newCostDate,
+          );
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not save manual cost entry to backend.')),
+      );
+      return;
+    }
 
     _titleController.clear();
     _amountController.clear();
@@ -99,26 +99,85 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
 
   String _dateText(DateTime d) => '${d.day}/${d.month}/${d.year}';
 
+  DateTimeRange _selectedMonthRange() {
+    return DateTimeRange(
+      start: DateTime(_selectedYear, _selectedMonth, 1),
+      end: DateTime(_selectedYear, _selectedMonth + 1, 0),
+    );
+  }
+
+  List<int> _yearOptions() {
+    final now = DateTime.now().year;
+    return List<int>.generate(10, (i) => now - 5 + i);
+  }
+
+  DateTimeRange _currentWeekRange() {
+    final now = DateTime.now();
+    final start = now.subtract(Duration(days: now.weekday - 1));
+    final end = start.add(const Duration(days: 6));
+    return DateTimeRange(start: DateTime(start.year, start.month, start.day), end: DateTime(end.year, end.month, end.day));
+  }
+
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<CostAnalysisProvider>();
-    final range = _activeRange();
+    final monthRange = _selectedMonthRange();
+    final yearRange = DateTimeRange(start: DateTime(_selectedYear, 1, 1), end: DateTime(_selectedYear, 12, 31));
+    final weekRange = _currentWeekRange();
+    final today = DateTime.now();
 
-    final total = provider.totalInRange(
-      start: range.start,
-      end: range.end,
+    final selectedMonthTotal = provider.totalInRange(
+      start: monthRange.start,
+      end: monthRange.end,
+      includeCooking: _includeCookingData,
+      includeManual: _includeManualData,
+      category: _selectedCategory,
+    );
+    final selectedYearTotal = provider.totalInRange(
+      start: yearRange.start,
+      end: yearRange.end,
+      includeCooking: _includeCookingData,
+      includeManual: _includeManualData,
+      category: _selectedCategory,
+    );
+    final thisWeekTotal = provider.totalInRange(
+      start: weekRange.start,
+      end: weekRange.end,
+      includeCooking: _includeCookingData,
+      includeManual: _includeManualData,
+      category: _selectedCategory,
+    );
+    final todayTotal = provider.totalInRange(
+      start: today,
+      end: today,
       includeCooking: _includeCookingData,
       includeManual: _includeManualData,
       category: _selectedCategory,
     );
 
-    final monthlyFood = provider.monthlyTotal(category: 'Food');
-    final yearlyFood = provider.yearlyTotal(category: 'Food');
-    final monthlyNutrition = provider.monthlyTotal(category: 'Nutrition');
-    final yearlyNutrition = provider.yearlyTotal(category: 'Nutrition');
+    final dailyBreakdown = provider.dailyBreakdown(
+      year: _selectedYear,
+      month: _selectedMonth,
+      includeCooking: _includeCookingData,
+      includeManual: _includeManualData,
+      category: _selectedCategory,
+    );
+    final weeklyBreakdown = provider.weeklyBreakdown(
+      year: _selectedYear,
+      month: _selectedMonth,
+      includeCooking: _includeCookingData,
+      includeManual: _includeManualData,
+      category: _selectedCategory,
+    );
+    final monthlyBreakdown = provider.monthlyBreakdown(
+      year: _selectedYear,
+      includeCooking: _includeCookingData,
+      includeManual: _includeManualData,
+      category: _selectedCategory,
+    );
 
-    final cookingItems = provider.cookingInRange(range.start, range.end);
-    final manualItems = provider.manualInRange(range.start, range.end, category: _selectedCategory);
+    final cookingItems = provider.cookingInRange(monthRange.start, monthRange.end);
+    final manualItems = provider.manualInRange(monthRange.start, monthRange.end, category: _selectedCategory);
 
     final showCooking = _includeCookingData && (_selectedCategory == 'All' || _selectedCategory == 'Food');
     final showManual = _includeManualData;
@@ -133,7 +192,7 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
       ),
       body: LiquidGlassBackground(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -147,28 +206,75 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
                       style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
                     ),
                     const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      value: _selectedPeriod,
-                      items: _periodOptions
-                          .map((e) => DropdownMenuItem<String>(value: e, child: Text(e)))
-                          .toList(),
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setState(() => _selectedPeriod = value);
-                      },
-                      decoration: const InputDecoration(labelText: 'Time Range'),
-                    ),
-                    if (_selectedPeriod == 'Custom Range') ...[
-                      const SizedBox(height: 10),
-                      OutlinedButton.icon(
-                        onPressed: _pickCustomRange,
-                        icon: const Icon(Icons.date_range),
-                        label: Text(
-                          _customStart != null && _customEnd != null
-                              ? '${_dateText(_customStart!)} - ${_dateText(_customEnd!)}'
-                              : 'Pick custom range',
+                    Row(
+                      children: [
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            value: _selectedMonth,
+                            items: List<DropdownMenuItem<int>>.generate(
+                              12,
+                              (i) => DropdownMenuItem<int>(value: i + 1, child: Text(_monthNames[i])),
+                            ),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _selectedMonth = value);
+                            },
+                            decoration: const InputDecoration(labelText: 'Month'),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: DropdownButtonFormField<int>(
+                            value: _selectedYear,
+                            items: _yearOptions()
+                                .map((y) => DropdownMenuItem<int>(value: y, child: Text(y.toString())))
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _selectedYear = value);
+                            },
+                            decoration: const InputDecoration(labelText: 'Year'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Selected: ${_monthNames[_selectedMonth - 1]} $_selectedYear',
+                      style: const TextStyle(color: Color(0xFFEAF6FF)),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              final now = DateTime.now();
+                              setState(() {
+                                _selectedMonth = now.month;
+                                _selectedYear = now.year;
+                              });
+                            },
+                            icon: const Icon(Icons.today),
+                            label: const Text('Use Current'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () {
+                              provider.loadCookingItems();
+                              provider.loadManualCosts();
+                            },
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Refresh Data'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (provider.isLoadingCookingItems || provider.isLoadingManualItems) ...[
+                      const SizedBox(height: 10),
+                      const LinearProgressIndicator(minHeight: 6),
                     ],
                     const SizedBox(height: 10),
                     DropdownButtonFormField<String>(
@@ -205,19 +311,18 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Totals',
+                      'Calculated Totals',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
                     ),
                     const SizedBox(height: 10),
                     Text(
-                      'Selected Range Total: ${total.toStringAsFixed(2)}',
-                      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: Colors.white),
+                      'Month Total: ${selectedMonthTotal.toStringAsFixed(2)}',
+                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Colors.white),
                     ),
                     const SizedBox(height: 8),
-                    Text('Monthly Food: ${monthlyFood.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEFFFFA))),
-                    Text('Yearly Food: ${yearlyFood.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEFFFFA))),
-                    Text('Monthly Nutrition: ${monthlyNutrition.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEFFFFA))),
-                    Text('Yearly Nutrition: ${yearlyNutrition.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEFFFFA))),
+                    Text('Year Total: ${selectedYearTotal.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEFFFFA))),
+                    Text('This Week: ${thisWeekTotal.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEFFFFA))),
+                    Text('Today: ${todayTotal.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEFFFFA))),
                   ],
                 ),
               ),
@@ -270,8 +375,74 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
                 ),
               ),
               const SizedBox(height: 16),
+              LiquidGlassCard(
+                tint: const Color(0xFFD7E9FF),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Daily Breakdown (${_monthNames[_selectedMonth - 1]} $_selectedYear)',
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(height: 8),
+                    ...dailyBreakdown.entries.where((e) => e.value > 0).map(
+                          (e) => Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text('Day ${e.key}: ${e.value.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEAF6FF))),
+                          ),
+                        ),
+                    if (dailyBreakdown.values.every((v) => v <= 0))
+                      const Text('No daily entries for selected month.', style: TextStyle(color: Color(0xFFEAF6FF))),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              LiquidGlassCard(
+                tint: const Color(0xFFD6FFE8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Weekly Breakdown (${_monthNames[_selectedMonth - 1]} $_selectedYear)',
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(height: 8),
+                    ...weeklyBreakdown.entries.where((e) => e.value > 0).map(
+                          (e) => Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text('Week ${e.key}: ${e.value.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEAF6FF))),
+                          ),
+                        ),
+                    if (weeklyBreakdown.values.every((v) => v <= 0))
+                      const Text('No weekly entries for selected month.', style: TextStyle(color: Color(0xFFEAF6FF))),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              LiquidGlassCard(
+                tint: const Color(0xFFF1D7FF),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Monthly Breakdown ($_selectedYear)',
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                    const SizedBox(height: 8),
+                    ...monthlyBreakdown.entries.where((e) => e.value > 0).map(
+                          (e) => Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Text('${_monthNames[e.key - 1]}: ${e.value.toStringAsFixed(2)}', style: const TextStyle(color: Color(0xFFEAF6FF))),
+                          ),
+                        ),
+                    if (monthlyBreakdown.values.every((v) => v <= 0))
+                      const Text('No monthly entries for selected year.', style: TextStyle(color: Color(0xFFEAF6FF))),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
               const Text(
-                'Data Used For Analysis',
+                'Data Used For Analysis (Selected Month)',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
               ),
               const SizedBox(height: 10),
@@ -315,7 +486,16 @@ class _CostAnalysisScreenState extends State<CostAnalysisScreen> {
                       ),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete, color: Color(0xFFFFD5D5)),
-                        onPressed: () => provider.removeManualCost(entry.id),
+                        onPressed: () async {
+                          try {
+                            await provider.removeManualCost(entry.id);
+                          } catch (_) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Failed to delete manual cost entry.')),
+                            );
+                          }
+                        },
                       ),
                     ),
                   ),

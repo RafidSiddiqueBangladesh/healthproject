@@ -4,6 +4,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../data/bd_admin_mock_data.dart';
+import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
 
 enum ServiceMapType { hospital, ambulance, medicineShop }
@@ -28,45 +30,100 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
   bool _isLoading = true;
   String? _error;
   String _query = '';
+  static const int _nearbyLimit = 12;
 
-  static const List<_PointItem> _hospitals = [
-    _PointItem('h1', 'City Care Hospital', '12 Main Road', '+8801711111111', 23.7890, 90.4010),
-    _PointItem('h2', 'Green Life Medical', '22 Lake Avenue', '+8801722222222', 23.7801, 90.4153),
-    _PointItem('h3', 'Evercare Mock Center', '88 Health Street', '+8801733333333', 23.8046, 90.4219),
-    _PointItem('h4', 'Northern Health Hospital', '4 River View', '+8801733300001', 23.7760, 90.4075),
-    _PointItem('h5', 'People Care Hospital', '17 Sunrise Ave', '+8801733300002', 23.7941, 90.3964),
-    _PointItem('h6', 'Central Medical Hub', '54 Link Road', '+8801733300003', 23.8032, 90.4130),
-    _PointItem('h7', 'Apollo Mock Point', '101 Metro Lane', '+8801733300004', 23.7688, 90.4177),
-    _PointItem('h8', 'Community Care Hospital', '8 Park Side', '+8801733300005', 23.8103, 90.4022),
-    _PointItem('h9', 'Prime Health Clinic', '31 New Circular', '+8801733300006', 23.7843, 90.4240),
-    _PointItem('h10', 'Metro Hospital Unit', '63 Healing Street', '+8801733300007', 23.7997, 90.3903),
-  ];
+  static final List<_DistrictArea> _districtAreas = _buildDistrictAreas();
+  static const int _pointsPerDistrict = 10;
 
-  static const List<_PointItem> _ambulances = [
-    _PointItem('a1', 'Rapid Ambulance Unit', 'Emergency Hub 1', '+8801777777777', 23.7922, 90.3920),
-    _PointItem('a2', 'LifeLine Ambulance', 'Emergency Hub 2', '+8801788888888', 23.7704, 90.4258),
-    _PointItem('a3', '24x7 Rescue Ambulance', 'Emergency Hub 3', '+8801799999999', 23.8001, 90.4051),
-    _PointItem('a4', 'City Emergency Van', 'Responder Point A', '+8801788700001', 23.7813, 90.4104),
-    _PointItem('a5', 'FastCare Ambulance', 'Responder Point B', '+8801788700002', 23.8078, 90.3982),
-    _PointItem('a6', 'Green Cross Ambulance', 'Responder Point C', '+8801788700003', 23.7759, 90.4202),
-    _PointItem('a7', 'MediRescue Unit', 'Responder Point D', '+8801788700004', 23.8115, 90.4160),
-    _PointItem('a8', 'Pulse Ambulance', 'Responder Point E', '+8801788700005', 23.7851, 90.3941),
-    _PointItem('a9', 'SafeRide Ambulance', 'Responder Point F', '+8801788700006', 23.7973, 90.4274),
-    _PointItem('a10', 'Rapid Aid Ambulance', 'Responder Point G', '+8801788700007', 23.7665, 90.4048),
-  ];
+  static List<_DistrictArea> _buildDistrictAreas() {
+    final areas = <_DistrictArea>[];
+    var index = 0;
+    for (final division in bdDivisionsMockData) {
+      for (final district in division.districts) {
+        // Deterministic spread across Bangladesh bounding box for mock map points.
+        final row = index ~/ 8;
+        final col = index % 8;
+        final lat = 20.95 + (row * 0.47) + ((col % 2) * 0.03);
+        final lng = 88.15 + (col * 0.43) + ((row % 2) * 0.04);
+        areas.add(
+          _DistrictArea(
+            id: 'd${index + 1}',
+            division: division.name,
+            district: district.name,
+            lat: lat,
+            lng: lng,
+          ),
+        );
+        index++;
+      }
+    }
+    return areas;
+  }
 
-  static const List<_PointItem> _medicineShops = [
-    _PointItem('m1', 'MediPlus Pharmacy', '5 Central Point', '+8801744444444', 23.7861, 90.4084),
-    _PointItem('m2', 'Care Drug House', '9 Clinic Lane', '+8801755555555', 23.7758, 90.3989),
-    _PointItem('m3', 'Health First Medicine', '33 Relief Road', '+8801766666666', 23.8122, 90.4101),
-    _PointItem('m4', 'City Pharmacy', '71 Main Junction', '+8801766600001', 23.8039, 90.3976),
-    _PointItem('m5', 'Trust Medicine Corner', '16 Wellness Rd', '+8801766600002', 23.7723, 90.4144),
-    _PointItem('m6', 'Well Drug Store', '90 Central Blvd', '+8801766600003', 23.7928, 90.4225),
-    _PointItem('m7', 'Life Care Pharmacy', '2 East Avenue', '+8801766600004', 23.7800, 90.3928),
-    _PointItem('m8', 'Prime Drug House', '45 Metro Link', '+8801766600005', 23.8081, 90.4068),
-    _PointItem('m9', 'Good Health Medics', '53 Green Street', '+8801766600006', 23.7681, 90.4209),
-    _PointItem('m10', 'QuickMeds', '14 Park Plaza', '+8801766600007', 23.7988, 90.4015),
-  ];
+  List<_PointItem> _itemsForType(ServiceMapType type) {
+    final items = <_PointItem>[];
+    for (final entry in _districtAreas.asMap().entries) {
+      final i = entry.key;
+      final area = entry.value;
+      final district = area.district;
+      final division = area.division;
+
+      for (var unit = 1; unit <= _pointsPerDistrict; unit++) {
+        final offsetLat = ((unit - 5) * 0.006) + ((i % 3) * 0.0012);
+        final offsetLng = ((unit % 5) * 0.005) - 0.012 + ((i % 4) * 0.001);
+        final suffix = '${i + 1}${unit.toString().padLeft(2, '0')}';
+
+        switch (type) {
+          case ServiceMapType.hospital:
+            items.add(
+              _PointItem(
+                'h-${area.id}-$unit',
+                '$district District Hospital $unit',
+                'Unit $unit, $district Sadar, $division',
+                '+880171$suffix',
+                area.lat + offsetLat,
+                area.lng + offsetLng,
+                district,
+                division,
+                'Hospital',
+              ),
+            );
+            break;
+          case ServiceMapType.ambulance:
+            items.add(
+              _PointItem(
+                'a-${area.id}-$unit',
+                '$district Ambulance Service $unit',
+                'Responder Unit $unit, $district, $division',
+                '+880181$suffix',
+                area.lat + offsetLat + 0.004,
+                area.lng + offsetLng - 0.004,
+                district,
+                division,
+                'Ambulance',
+              ),
+            );
+            break;
+          case ServiceMapType.medicineShop:
+            items.add(
+              _PointItem(
+                'm-${area.id}-$unit',
+                '$district Medical Shop $unit',
+                'Market Unit $unit, $district, $division',
+                '+880191$suffix',
+                area.lat + offsetLat - 0.004,
+                area.lng + offsetLng + 0.004,
+                district,
+                division,
+                'Medicine Shop',
+              ),
+            );
+            break;
+        }
+      }
+    }
+    return items;
+  }
 
   @override
   void initState() {
@@ -86,14 +143,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
   }
 
   List<_PointItem> get _allItems {
-    switch (widget.type) {
-      case ServiceMapType.hospital:
-        return _hospitals;
-      case ServiceMapType.ambulance:
-        return _ambulances;
-      case ServiceMapType.medicineShop:
-        return _medicineShops;
-    }
+    return _itemsForType(widget.type);
   }
 
   List<_PointItem> get _filteredItems {
@@ -101,9 +151,29 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
       return _allItems;
     }
     return _allItems.where((item) {
-      final haystack = '${item.name} ${item.address}'.toLowerCase();
+      final haystack = '${item.name} ${item.address} ${item.district} ${item.division}'.toLowerCase();
       return haystack.contains(_query);
     }).toList();
+  }
+
+  List<_PointItem> get _visibleItems {
+    if (_position == null) {
+      return _filteredItems;
+    }
+    return _nearestItemsFrom(_position!, _filteredItems, _nearbyLimit);
+  }
+
+  List<_PointItem> _nearestItemsFrom(Position pos, List<_PointItem> items, int limit) {
+    final sorted = List<_PointItem>.from(items);
+    sorted.sort((a, b) {
+      final da = Geolocator.distanceBetween(pos.latitude, pos.longitude, a.lat, a.lng);
+      final db = Geolocator.distanceBetween(pos.latitude, pos.longitude, b.lat, b.lng);
+      return da.compareTo(db);
+    });
+    if (sorted.length <= limit) {
+      return sorted;
+    }
+    return sorted.take(limit).toList();
   }
 
   Future<void> _loadLocationAndFocusNearest() async {
@@ -249,6 +319,14 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
     return base + (item.id.codeUnitAt(0) % 11) + (item.id.codeUnitAt(item.id.length - 1) % 7);
   }
 
+  String _staffLabel() {
+    return switch (widget.type) {
+      ServiceMapType.hospital => 'Total Doctors',
+      ServiceMapType.ambulance => 'Emergency Staff',
+      ServiceMapType.medicineShop => 'Pharmacy Staff',
+    };
+  }
+
   void _showItemDetails(_PointItem item) {
     showModalBottomSheet<void>(
       context: context,
@@ -282,8 +360,11 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                   ),
                   const SizedBox(height: 12),
                   _detailRow('Phone', item.phone),
+                  _detailRow('District', item.district),
+                  _detailRow('Division', item.division),
+                  _detailRow('Service Type', item.serviceType),
                   _detailRow('Website', _websiteFor(item)),
-                  _detailRow('Total Doctors', _doctorCountFor(item).toString()),
+                  _detailRow(_staffLabel(), _doctorCountFor(item).toString()),
                   _detailRow('Location', '${item.lat.toStringAsFixed(5)}, ${item.lng.toStringAsFixed(5)}'),
                   _detailRow('Address', item.address),
                   const SizedBox(height: 12),
@@ -336,10 +417,15 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
-      appBar: AppBar(title: Text(_screenTitle)),
+      appBar: AppBar(
+        title: BeautifiedTabHeading(
+          title: _screenTitle,
+          icon: _typeIcon,
+        ),
+      ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
               : Column(
@@ -359,6 +445,13 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                                 ),
                               ),
                             ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            _position == null
+                                ? 'Showing all available points (location not ready).'
+                                : 'Showing nearest ${_visibleItems.length} of ${_filteredItems.length} matched points from 64 district locations.',
+                            style: const TextStyle(color: Color(0xFFEAF6FF), fontSize: 12),
                           ),
                           const SizedBox(height: 10),
                           TextField(
@@ -412,10 +505,10 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
                                 child: Text('No result for this search.', style: TextStyle(color: Colors.white)),
                               )
                             : ListView.separated(
-                                itemCount: _filteredItems.length,
+                                itemCount: _visibleItems.length,
                                 separatorBuilder: (_, __) => const SizedBox(height: 10),
                                 itemBuilder: (context, index) {
-                                  final item = _filteredItems[index];
+                                  final item = _visibleItems[index];
                                   return InkWell(
                                     onTap: () {
                                       _mapController.move(LatLng(item.lat, item.lng), 16);
@@ -484,7 +577,7 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
       );
     }
 
-    for (final item in _filteredItems) {
+    for (final item in _visibleItems) {
       markers.add(
         Marker(
           point: LatLng(item.lat, item.lng),
@@ -518,12 +611,41 @@ class _ServiceMapScreenState extends State<ServiceMapScreen> {
 }
 
 class _PointItem {
-  const _PointItem(this.id, this.name, this.address, this.phone, this.lat, this.lng);
+  const _PointItem(
+    this.id,
+    this.name,
+    this.address,
+    this.phone,
+    this.lat,
+    this.lng,
+    this.district,
+    this.division,
+    this.serviceType,
+  );
 
   final String id;
   final String name;
   final String address;
   final String phone;
+  final double lat;
+  final double lng;
+  final String district;
+  final String division;
+  final String serviceType;
+}
+
+class _DistrictArea {
+  const _DistrictArea({
+    required this.id,
+    required this.division,
+    required this.district,
+    required this.lat,
+    required this.lng,
+  });
+
+  final String id;
+  final String division;
+  final String district;
   final double lat;
   final double lng;
 }

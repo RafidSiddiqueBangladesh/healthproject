@@ -5,7 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/user.dart' as user_model;
 
 class UserProvider with ChangeNotifier {
-  user_model.User _user = user_model.User(id: '', name: 'Loading...', points: 0);
+  user_model.User _user = user_model.User(id: '', name: 'Loading...', points: 0, avatar: '');
   bool _isLoading = true;
   String? _error;
 
@@ -45,6 +45,7 @@ class UserProvider with ChangeNotifier {
             id: userData['_id'] ?? userData['id'] ?? '',
             name: userData['name'] ?? 'User',
             points: userData['points'] ?? 0,
+            avatar: userData['avatar'] ?? '',
           );
         }
       } else {
@@ -60,6 +61,11 @@ class UserProvider with ChangeNotifier {
 
   void addPoints(int points) {
     _user.points += points;
+    notifyListeners();
+  }
+
+  void setAvatar(String avatarUrl) {
+    _user.avatar = avatarUrl;
     notifyListeners();
   }
 }

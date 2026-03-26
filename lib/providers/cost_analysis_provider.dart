@@ -43,12 +43,14 @@ class CostAnalysisProvider with ChangeNotifier {
   final List<CookingCostItem> _cookingItems = [];
   final List<ManualCostEntry> _manualEntries = [];
   bool _isLoadingCookingItems = false;
+  bool _isLoadingManualItems = false;
 
   static const String _apiBaseUrl = 'http://localhost:5000';
 
   List<CookingCostItem> get cookingItems => List.unmodifiable(_cookingItems);
   List<ManualCostEntry> get manualEntries => List.unmodifiable(_manualEntries);
   bool get isLoadingCookingItems => _isLoadingCookingItems;
+  bool get isLoadingManualItems => _isLoadingManualItems;
 
   String _nextId() => DateTime.now().microsecondsSinceEpoch.toString();
 
@@ -87,6 +89,43 @@ class CostAnalysisProvider with ChangeNotifier {
       }
     } finally {
       _isLoadingCookingItems = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> loadManualCosts() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+
+    _isLoadingManualItems = true;
+    notifyListeners();
+
+    try {
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/api/profile/manual-costs'),
+        headers: {
+          'Authorization': 'Bearer ${session.accessToken}',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final payload = jsonDecode(response.body);
+        if (payload['success'] == true) {
+          final rows = List<Map<String, dynamic>>.from(payload['data'] ?? []);
+          _manualEntries
+            ..clear()
+            ..addAll(rows.map((row) => ManualCostEntry(
+                  id: (row['id'] ?? row['_id']).toString(),
+                  title: (row['title'] ?? '').toString(),
+                  category: (row['category'] ?? 'Food').toString(),
+                  amount: ((row['amount'] ?? 0) as num).toDouble(),
+                  date: DateTime.tryParse((row['date'] ?? '').toString()) ?? DateTime.now(),
+                )));
+        }
+      }
+    } finally {
+      _isLoadingManualItems = false;
       notifyListeners();
     }
   }
@@ -160,25 +199,65 @@ class CostAnalysisProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  void addManualCost({
+  Future<void> addManualCost({
     required String title,
     required String category,
     required double amount,
     required DateTime date,
-  }) {
-    _manualEntries.add(
-      ManualCostEntry(
-        id: _nextId(),
-        title: title,
-        category: category,
-        amount: amount,
-        date: date,
-      ),
+  }) async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+
+    final response = await http.post(
+      Uri.parse('$_apiBaseUrl/api/profile/manual-costs'),
+      headers: {
+        'Authorization': 'Bearer ${session.accessToken}',
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'title': title,
+        'category': category,
+        'amount': amount,
+        'date': date.toIso8601String(),
+      }),
     );
-    notifyListeners();
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final payload = jsonDecode(response.body);
+      final row = Map<String, dynamic>.from(payload['data'] ?? {});
+      _manualEntries.insert(
+        0,
+        ManualCostEntry(
+          id: (row['id'] ?? row['_id'] ?? _nextId()).toString(),
+          title: (row['title'] ?? title).toString(),
+          category: (row['category'] ?? category).toString(),
+          amount: ((row['amount'] ?? amount) as num).toDouble(),
+          date: DateTime.tryParse((row['date'] ?? '').toString()) ?? date,
+        ),
+      );
+      notifyListeners();
+      return;
+    }
+
+    throw Exception('Failed to save manual cost entry');
   }
 
-  void removeManualCost(String id) {
+  Future<void> removeManualCost(String id) async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) return;
+
+    final response = await http.delete(
+      Uri.parse('$_apiBaseUrl/api/profile/manual-costs/$id'),
+      headers: {
+        'Authorization': 'Bearer ${session.accessToken}',
+        'Content-Type': 'application/json',
+      },
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to remove manual cost entry');
+    }
+
     _manualEntries.removeWhere((entry) => entry.id == id);
     notifyListeners();
   }
@@ -233,5 +312,72 @@ class CostAnalysisProvider with ChangeNotifier {
     final start = DateTime(now.year, 1, 1);
     final end = DateTime(now.year, 12, 31);
     return totalInRange(start: start, end: end, category: category);
+  }
+
+  Map<int, double> dailyBreakdown({
+    required int year,
+    required int month,
+    bool includeCooking = true,
+    bool includeManual = true,
+    String category = 'All',
+  }) {
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    final map = <int, double>{};
+
+    for (var day = 1; day <= daysInMonth; day++) {
+      final d = DateTime(year, month, day);
+      map[day] = totalInRange(
+        start: d,
+        end: d,
+        includeCooking: includeCooking,
+        includeManual: includeManual,
+        category: category,
+      );
+    }
+
+    return map;
+  }
+
+  Map<int, double> weeklyBreakdown({
+    required int year,
+    required int month,
+    bool includeCooking = true,
+    bool includeManual = true,
+    String category = 'All',
+  }) {
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    final map = <int, double>{};
+
+    for (var day = 1; day <= daysInMonth; day++) {
+      final weekIndex = ((day - 1) ~/ 7) + 1;
+      map[weekIndex] = (map[weekIndex] ?? 0) + totalInRange(
+        start: DateTime(year, month, day),
+        end: DateTime(year, month, day),
+        includeCooking: includeCooking,
+        includeManual: includeManual,
+        category: category,
+      );
+    }
+
+    return map;
+  }
+
+  Map<int, double> monthlyBreakdown({
+    required int year,
+    bool includeCooking = true,
+    bool includeManual = true,
+    String category = 'All',
+  }) {
+    final map = <int, double>{};
+    for (var month = 1; month <= 12; month++) {
+      map[month] = totalInRange(
+        start: DateTime(year, month, 1),
+        end: DateTime(year, month + 1, 0),
+        includeCooking: includeCooking,
+        includeManual: includeManual,
+        category: category,
+      );
+    }
+    return map;
   }
 }

@@ -63,9 +63,9 @@ class LiveTrackingProvider extends ChangeNotifier {
       await _service.initializeCamera();
       _isCameraReady = _service.isInitialized;
       notifyListeners();
-    } catch (_) {
+    } catch (e) {
       _isCameraReady = false;
-      _errorMessage = 'Camera initialization failed. Please allow camera access and try again.';
+      _errorMessage = 'Camera initialization failed: $e';
       notifyListeners();
     }
   }
@@ -195,11 +195,11 @@ class LiveTrackingProvider extends ChangeNotifier {
     });
     try {
       await _service.start(exerciseName: exerciseName);
-    } catch (_) {
+    } catch (e) {
       _isTracking = false;
       _subscription?.cancel();
       _subscription = null;
-      _errorMessage = 'Realtime detection failed to start. Please retry camera access.';
+      _errorMessage = 'Realtime detection failed to start: $e';
     }
     notifyListeners();
   }

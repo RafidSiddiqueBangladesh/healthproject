@@ -232,7 +232,7 @@ class _NearbyServicesScreenState extends State<NearbyServicesScreen> {
       ),
       body: LiquidGlassBackground(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 24),
+          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
               : SingleChildScrollView(

@@ -1,11 +1,11 @@
 import 'dart:async';
-import 'dart:ui_web' as ui_web;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:web/web.dart' as web;
 import 'package:webview_flutter/webview_flutter.dart';
 import '../providers/exercise_provider.dart';
+import '../utils/web_iframe_registry.dart'
+  if (dart.library.html) '../utils/web_iframe_registry_web.dart' as web_iframe;
 import 'exercise_coach_screen.dart';
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
@@ -24,6 +24,19 @@ class _ExerciseModuleState extends State<ExerciseModule> {
     'Squats': 'aclHkVaku9U',
     'Jumping Jacks': '2W4ZNSwoW_4',
   };
+
+  ButtonStyle _actionButtonStyle({required bool isPrimary}) {
+    return ElevatedButton.styleFrom(
+      backgroundColor: isPrimary ? const Color(0xFF1E88E5) : const Color(0xFF00A86B),
+      disabledBackgroundColor: const Color(0x665C6E82),
+      foregroundColor: Colors.white,
+      disabledForegroundColor: const Color(0xCCFFFFFF),
+      textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      elevation: 1,
+    );
+  }
 
   @override
   void initState() {
@@ -113,17 +126,10 @@ class _ExerciseModuleState extends State<ExerciseModule> {
 
   Widget _buildWebVideoWidget(String videoId) {
     final viewType = 'exercise-youtube-$videoId';
+    final embedUrl = 'https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0';
 
     if (!_registeredWebViewTypes.contains(viewType)) {
-      ui_web.platformViewRegistry.registerViewFactory(viewType, (int _) {
-        final iframe = web.HTMLIFrameElement()
-          ..src = 'https://www.youtube.com/embed/$videoId?autoplay=0&modestbranding=1&rel=0'
-          ..style.border = '0'
-          ..style.width = '100%'
-          ..style.height = '100%'
-          ..allowFullscreen = true;
-        return iframe;
-      });
+      web_iframe.registerIFrame(viewType: viewType, src: embedUrl);
       _registeredWebViewTypes.add(viewType);
     }
 
@@ -213,18 +219,20 @@ class _ExerciseModuleState extends State<ExerciseModule> {
                       children: [
                         if (!isRunning)
                           SizedBox(
-                            height: 28,
+                            height: 34,
                             child: ElevatedButton(
                               onPressed: () => _startTimer(index),
-                              child: const Text('Start Coach', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                              style: _actionButtonStyle(isPrimary: true),
+                              child: const Text('Start Coach'),
                             ),
                           ),
                         const SizedBox(width: 4),
                         SizedBox(
-                          height: 28,
+                          height: 34,
                           child: ElevatedButton(
                             onPressed: isRunning ? null : () => _completeExercise(index),
-                            child: const Text('Mark Done', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                            style: _actionButtonStyle(isPrimary: false),
+                            child: const Text('Mark Done'),
                           ),
                         ),
                       ],

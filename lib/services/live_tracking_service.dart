@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math';
-import 'dart:ui';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -8,6 +7,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
 import '../models/tracking_result.dart';
+import 'ml_input_image.dart';
 
 class LiveTrackingService {
   final _controller = StreamController<TrackingResult>.broadcast();
@@ -97,7 +97,7 @@ class LiveTrackingService {
 
     _isProcessingFrame = true;
     try {
-      final inputImage = _toInputImage(cameraImage);
+      final inputImage = buildInputImage(_cameraController, cameraImage);
       if (inputImage == null) {
         return;
       }
@@ -164,17 +164,18 @@ class LiveTrackingService {
           final kneeAngle = _average(leftKneeAngle, rightKneeAngle);
 
           if (kneeAngle != null) {
-            if (kneeAngle < 100) {
+            // More conservative: increased threshold from 100 to 110, require more extension
+            if (kneeAngle < 110) {
               _repDownPhase = true;
             }
-            if (_repDownPhase && kneeAngle > 158) {
+            if (_repDownPhase && kneeAngle > 165) {
               _repCount += 1;
               _repDownPhase = false;
             }
             final squatDepth = ((165 - kneeAngle) / 75).clamp(0.0, 1.0);
             final kneeSymmetry = 1 - (((leftKnee?.y ?? 0) - (rightKnee?.y ?? 0)).abs() / 100).clamp(0.0, 1.0);
             formScore = ((squatDepth * 0.65) + (kneeSymmetry * 0.35)).clamp(0.0, 1.0);
-            exerciseFeedback = kneeAngle < 105
+            exerciseFeedback = kneeAngle < 115
                 ? 'Great squat depth. Drive up through your heels.'
                 : 'Go lower by bending knees and pushing hips back.';
           }
@@ -208,10 +209,11 @@ class LiveTrackingService {
           final bodyLine = _angle(leftShoulder, leftHip, leftAnkle);
 
           if (elbowAngle != null) {
-            if (elbowAngle < 98) {
+            // More conservative: increased threshold from 98 to 105, require more extension
+            if (elbowAngle < 105) {
               _repDownPhase = true;
             }
-            if (_repDownPhase && elbowAngle > 152) {
+            if (_repDownPhase && elbowAngle > 160) {
               _repCount += 1;
               _repDownPhase = false;
             }
@@ -219,7 +221,7 @@ class LiveTrackingService {
             final pushDepth = ((160 - elbowAngle) / 75).clamp(0.0, 1.0);
             final plankScore = bodyLine == null ? 0.5 : (1 - ((180 - bodyLine).abs() / 70)).clamp(0.0, 1.0);
             formScore = ((pushDepth * 0.65) + (plankScore * 0.35)).clamp(0.0, 1.0);
-            exerciseFeedback = elbowAngle < 102
+            exerciseFeedback = elbowAngle < 110
                 ? 'Good push depth. Keep core tight and push up fully.'
                 : 'Lower chest more and keep elbows controlled.';
           }
@@ -254,29 +256,6 @@ class LiveTrackingService {
     } finally {
       _isProcessingFrame = false;
     }
-  }
-
-  InputImage? _toInputImage(CameraImage image) {
-    final controller = _cameraController;
-    if (controller == null) {
-      return null;
-    }
-
-    final bytesBuilder = WriteBuffer();
-    for (final plane in image.planes) {
-      bytesBuilder.putUint8List(plane.bytes);
-    }
-    final bytes = bytesBuilder.done().buffer.asUint8List();
-
-    final metadata = InputImageMetadata(
-      size: Size(image.width.toDouble(), image.height.toDouble()),
-      rotation: InputImageRotationValue.fromRawValue(controller.description.sensorOrientation) ??
-          InputImageRotation.rotation0deg,
-      format: InputImageFormatValue.fromRawValue(image.format.raw) ?? InputImageFormat.nv21,
-      bytesPerRow: image.planes.first.bytesPerRow,
-    );
-
-    return InputImage.fromBytes(bytes: bytes, metadata: metadata);
   }
 
   EmotionState _inferEmotion(List<Face> faces) {
