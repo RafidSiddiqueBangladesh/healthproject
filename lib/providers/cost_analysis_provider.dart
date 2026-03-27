@@ -47,7 +47,7 @@ class CostAnalysisProvider with ChangeNotifier {
 
   static const String _apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:5000',
+    defaultValue: 'https://healthproject-ermg.onrender.com',
   );
 
   List<CookingCostItem> get cookingItems => List.unmodifiable(_cookingItems);

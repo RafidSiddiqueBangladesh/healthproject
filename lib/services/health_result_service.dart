@@ -6,7 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class HealthResultService {
   static const String _apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:5000',
+    defaultValue: 'https://healthproject-ermg.onrender.com',
   );
 
   static String _normalizeRole(String role) {

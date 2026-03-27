@@ -18,7 +18,7 @@ class AuthService {
 
   static const String _apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:5000',
+    defaultValue: 'https://healthproject-ermg.onrender.com',
   );
 
   static const String _webRedirectUrl = String.fromEnvironment(

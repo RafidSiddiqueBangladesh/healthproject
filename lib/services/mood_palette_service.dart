@@ -12,7 +12,7 @@ class MoodPaletteService {
   static const String _themePrefsKey = 'theme_prefs_v1';
   static const String _apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:5000',
+    defaultValue: 'https://healthproject-ermg.onrender.com',
   );
   static Timer? _selectedMoodSaveDebounce;
   static String _lastSyncedMood = 'Neutral';

@@ -35,7 +35,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   static const String _apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:5000',
+    defaultValue: 'https://healthproject-ermg.onrender.com',
   );
   static const String _chatImageMarker = '[image]';
 
