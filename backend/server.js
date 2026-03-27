@@ -32,6 +32,19 @@ const app = express();
 // Trust proxy headers for Render (reverse proxy)
 app.set('trust proxy', true);
 
+const normalizeOrigin = (value) => {
+  if (!value || typeof value !== 'string') {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(value.trim());
+    return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+  } catch (error) {
+    return value.trim().replace(/\/+$/, '').toLowerCase();
+  }
+};
+
 const configuredOrigins = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL || '')
   .split(',')
   .map((origin) => origin.trim())
@@ -44,9 +57,11 @@ const defaultOrigins = [
   'http://127.0.0.1:3000',
 ];
 
-const allowedOrigins = new Set([
-  ...(configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins),
-]);
+const allowedOrigins = new Set(
+  (configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins)
+    .map((origin) => normalizeOrigin(origin))
+    .filter(Boolean)
+);
 
 // Security middleware
 app.use(helmet());
@@ -58,8 +73,16 @@ app.use(cors({
       return;
     }
 
+    const normalizedOrigin = normalizeOrigin(origin);
+
     // Allow explicit configured origins.
-    if (allowedOrigins.has(origin)) {
+    if (allowedOrigins.has(normalizedOrigin)) {
+      callback(null, true);
+      return;
+    }
+
+    // Allow Netlify hosted frontend domains.
+    if (/^https:\/\/[a-z0-9-]+\.netlify\.app$/i.test(normalizedOrigin)) {
       callback(null, true);
       return;
     }
