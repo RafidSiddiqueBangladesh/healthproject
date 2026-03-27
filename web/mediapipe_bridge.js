@@ -7,6 +7,46 @@
   let canvasCtx = null;
   let detector = null;
 
+  function getGlobal(name) {
+    if (typeof globalThis !== 'undefined' && globalThis[name]) {
+      return globalThis[name];
+    }
+    if (typeof window !== 'undefined' && window[name]) {
+      return window[name];
+    }
+    return undefined;
+  }
+
+  function getConnectionSet(name, fallbackOwnerName) {
+    const direct = getGlobal(name);
+    if (direct) {
+      return direct;
+    }
+    const owner = getGlobal(fallbackOwnerName);
+    if (owner && owner[name]) {
+      return owner[name];
+    }
+    return [];
+  }
+
+  function safeDrawConnectors(ctx, landmarks, connections, style) {
+    if (typeof drawConnectors !== 'function' || !ctx || !landmarks || !connections) {
+      return;
+    }
+    drawConnectors(ctx, landmarks, connections, style);
+  }
+
+  function safeDrawLandmarks(ctx, landmarks, style) {
+    if (typeof drawLandmarks !== 'function' || !ctx || !landmarks) {
+      return;
+    }
+    drawLandmarks(ctx, landmarks, style);
+  }
+
+  const FACE_MESH_CONNECTIONS = getConnectionSet('FACEMESH_TESSELATION', 'FaceMesh');
+  const HAND_CONNECTIONS_SET = getConnectionSet('HAND_CONNECTIONS', 'Hands');
+  const POSE_CONNECTIONS_SET = getConnectionSet('POSE_CONNECTIONS', 'Pose');
+
   function findElementByIdDeep(id, root) {
     const currentRoot = root || document;
     if (!currentRoot) {
@@ -356,7 +396,7 @@
         }
         if (results.multiFaceLandmarks) {
           results.multiFaceLandmarks.forEach((lms) => {
-            drawConnectors(canvasCtx, lms, FACEMESH_TESSELATION, { color: '#00E5FF', lineWidth: 1 });
+            safeDrawConnectors(canvasCtx, lms, FACE_MESH_CONNECTIONS, { color: '#00E5FF', lineWidth: 1 });
           });
         }
         canvasCtx.restore();
@@ -386,8 +426,8 @@
         }
         if (results.multiHandLandmarks) {
           results.multiHandLandmarks.forEach((lms) => {
-            drawConnectors(canvasCtx, lms, HAND_CONNECTIONS, { color: '#4ADE80', lineWidth: 3 });
-            drawLandmarks(canvasCtx, lms, { color: '#E2E8F0', lineWidth: 2 });
+            safeDrawConnectors(canvasCtx, lms, HAND_CONNECTIONS_SET, { color: '#4ADE80', lineWidth: 3 });
+            safeDrawLandmarks(canvasCtx, lms, { color: '#E2E8F0', lineWidth: 2 });
           });
         }
         canvasCtx.restore();
@@ -416,8 +456,8 @@
           canvasCtx.drawImage(results.image, 0, 0, canvasEl.width, canvasEl.height);
         }
         if (results.poseLandmarks) {
-          drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, { color: '#F472B6', lineWidth: 3 });
-          drawLandmarks(canvasCtx, results.poseLandmarks, { color: '#F8FAFC', lineWidth: 2 });
+          safeDrawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS_SET, { color: '#F472B6', lineWidth: 3 });
+          safeDrawLandmarks(canvasCtx, results.poseLandmarks, { color: '#F8FAFC', lineWidth: 2 });
         }
         canvasCtx.restore();
         updateShoulders(results.poseLandmarks);
@@ -446,13 +486,13 @@
           canvasCtx.drawImage(results.image, 0, 0, canvasEl.width, canvasEl.height);
         }
         if (results.poseLandmarks) {
-          drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS, { color: '#67E8F9', lineWidth: 3 });
+          safeDrawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS_SET, { color: '#67E8F9', lineWidth: 3 });
         }
         if (results.leftHandLandmarks) {
-          drawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS, { color: '#86EFAC', lineWidth: 2 });
+          safeDrawConnectors(canvasCtx, results.leftHandLandmarks, HAND_CONNECTIONS_SET, { color: '#86EFAC', lineWidth: 2 });
         }
         if (results.rightHandLandmarks) {
-          drawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS, { color: '#86EFAC', lineWidth: 2 });
+          safeDrawConnectors(canvasCtx, results.rightHandLandmarks, HAND_CONNECTIONS_SET, { color: '#86EFAC', lineWidth: 2 });
         }
         canvasCtx.restore();
 
