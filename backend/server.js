@@ -29,6 +29,9 @@ const aiRoutes = require('./routes/ai');
 // Initialize Express app
 const app = express();
 
+// Trust proxy headers for Render (reverse proxy)
+app.set('trust proxy', true);
+
 const configuredOrigins = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL || '')
   .split(',')
   .map((origin) => origin.trim())
