@@ -5,6 +5,7 @@ import 'dart:convert';
 import '../services/health_result_service.dart';
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
+import '../widgets/web_ratio_frame.dart';
 
 class BMICalculatorScreen extends StatefulWidget {
   @override
@@ -131,17 +132,21 @@ class _BMICalculatorScreenState extends State<BMICalculatorScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: const BeautifiedTabHeading(
           title: 'BMI Calculator',
           icon: Icons.calculate,
         ),
       ),
-      body: LiquidGlassBackground(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
-          child: SingleChildScrollView(
-            child: Column(
+      body: WebRatioFrame(
+        widthRatio: 1.5,
+        heightRatio: 2,
+        child: LiquidGlassBackground(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
+            child: SingleChildScrollView(
+              child: Column(
               children: [
                 LiquidGlassCard(
                   tint: const Color(0xFFD3DDFF),
@@ -233,6 +238,7 @@ class _BMICalculatorScreenState extends State<BMICalculatorScreen> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/health_result_service.dart';
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
+import '../widgets/web_ratio_frame.dart';
 import 'live_tracking_options_screen.dart';
 import 'bmi_calculator_screen.dart';
 import 'doctor_booking_screen.dart';
@@ -44,17 +45,21 @@ class _HealthMonitoringState extends State<HealthMonitoring> {
   Widget build(BuildContext context) {
     return Scaffold(
       extendBodyBehindAppBar: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: const BeautifiedTabHeading(
           title: 'Health Monitoring',
           icon: Icons.health_and_safety,
         ),
       ),
-      body: LiquidGlassBackground(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
-          child: SingleChildScrollView(
-            child: Column(
+      body: WebRatioFrame(
+        widthRatio: 1.5,
+        heightRatio: 2,
+        child: LiquidGlassBackground(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 106, 16, 80),
+            child: SingleChildScrollView(
+              child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 const LiquidGlassCard(
@@ -225,6 +230,7 @@ class _HealthMonitoringState extends State<HealthMonitoring> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

@@ -6,6 +6,7 @@ import '../services/mood_palette_service.dart';
 import '../providers/theme_provider.dart';
 import '../widgets/beautified_tab_heading.dart';
 import '../widgets/liquid_glass.dart';
+import '../widgets/web_ratio_frame.dart';
 
 class HealthResultsScreen extends StatefulWidget {
   const HealthResultsScreen({super.key});
@@ -483,6 +484,7 @@ class _HealthResultsScreenState extends State<HealthResultsScreen> {
     final totalTracking = _tracking.values.fold<int>(0, (sum, rows) => sum + rows.length);
     return Scaffold(
       extendBodyBehindAppBar: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       appBar: AppBar(
         title: const BeautifiedTabHeading(
           title: 'Health Results',
@@ -496,8 +498,11 @@ class _HealthResultsScreenState extends State<HealthResultsScreen> {
         backgroundColor: moodColor,
         foregroundColor: Colors.white,
       ),
-      body: LiquidGlassBackground(
-        child: Stack(
+      body: WebRatioFrame(
+        widthRatio: 1.5,
+        heightRatio: 2,
+        child: LiquidGlassBackground(
+          child: Stack(
           children: [
             Positioned.fill(
               child: IgnorePointer(
@@ -577,6 +582,7 @@ class _HealthResultsScreenState extends State<HealthResultsScreen> {
           ],
         ),
       ),
+            ),
     );
   }
 
