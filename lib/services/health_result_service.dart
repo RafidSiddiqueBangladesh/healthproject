@@ -4,7 +4,10 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class HealthResultService {
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
 
   static String _normalizeRole(String role) {
     final raw = role.trim().toLowerCase();

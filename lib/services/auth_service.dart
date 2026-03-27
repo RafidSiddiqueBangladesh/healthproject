@@ -26,6 +26,11 @@ class AuthService {
     defaultValue: 'http://localhost:64616',
   );
 
+  static const String _mobileRedirectUrl = String.fromEnvironment(
+    'MOBILE_REDIRECT_URL',
+    defaultValue: 'nutricare://login-callback/',
+  );
+
   List<String> _candidateBaseUrls() {
     return <String>{
       _apiBaseUrl,
@@ -116,9 +121,11 @@ class AuthService {
         }
       }
 
+      final redirectTo = kIsWeb ? _webRedirectUrl : _mobileRedirectUrl;
+
       await Supabase.instance.client.auth.signInWithOAuth(
         provider,
-        redirectTo: kIsWeb ? _webRedirectUrl : null,
+        redirectTo: redirectTo,
       );
       final providerName = provider.name[0].toUpperCase() + provider.name.substring(1);
       return AuthResult(

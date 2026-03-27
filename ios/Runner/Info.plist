@@ -49,5 +49,16 @@
 	<string>Camera access is used for real-time exercise form and face tracking.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Location access is needed to find nearby hospitals, medicine shops, and ambulances.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>nutricare</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

@@ -10,7 +10,10 @@ class MoodPaletteService {
   static const String _paletteKey = 'mood_palette_v1';
   static const String _selectedMoodKey = 'selected_mood_v1';
   static const String _themePrefsKey = 'theme_prefs_v1';
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
   static Timer? _selectedMoodSaveDebounce;
   static String _lastSyncedMood = 'Neutral';
 

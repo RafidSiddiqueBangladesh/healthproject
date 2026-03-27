@@ -13,7 +13,10 @@ class UserProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
 
   Future<void> fetchUserProfile() async {
     try {

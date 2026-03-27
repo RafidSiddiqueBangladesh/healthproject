@@ -45,7 +45,10 @@ class CostAnalysisProvider with ChangeNotifier {
   bool _isLoadingCookingItems = false;
   bool _isLoadingManualItems = false;
 
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
 
   List<CookingCostItem> get cookingItems => List.unmodifiable(_cookingItems);
   List<ManualCostEntry> get manualEntries => List.unmodifiable(_manualEntries);

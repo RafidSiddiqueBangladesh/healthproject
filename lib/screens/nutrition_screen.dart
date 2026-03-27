@@ -105,7 +105,10 @@ class _NutritionTrackerState extends State<NutritionTracker> {
     ),
   ];
 
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
 
   static const _amountOptions = <String>['Default', '1 piece', '1 cup', '100 g', '200 g', 'Custom grams', 'Custom pieces'];
 

@@ -38,7 +38,10 @@ class _CookingScreenState extends State<CookingScreen> {
   final Map<String, String> _recipeVideoIds = <String, String>{};
   final Set<String> _loadingRecipeVideos = <String>{};
   final Set<String> _failedRecipeVideos = <String>{};
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
 
   bool _isListening = false;
   bool _isVoiceEntryMode = false;

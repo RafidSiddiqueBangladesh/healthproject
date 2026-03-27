@@ -8,7 +8,10 @@ class NutritionProvider with ChangeNotifier {
   final List<Food> _foods = [];
   bool _isLoading = false;
 
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
 
   List<Food> get foods => List<Food>.unmodifiable(_foods);
   bool get isLoading => _isLoading;

@@ -33,7 +33,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _userRole = 'patient';
   bool _isSavingUserRole = false;
 
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
   static const String _chatImageMarker = '[image]';
 
   String _messageSenderId(Map<String, dynamic> msg) {

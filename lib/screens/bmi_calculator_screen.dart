@@ -20,7 +20,10 @@ class _BMICalculatorScreenState extends State<BMICalculatorScreen> {
   String _suggestion = '';
   bool _isSaving = false;
 
-  static const String _apiBaseUrl = 'http://localhost:5000';
+  static const String _apiBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://localhost:5000',
+  );
 
   Future<void> _calculateBMI() async {
     double weight = double.tryParse(_weightController.text) ?? 0;
