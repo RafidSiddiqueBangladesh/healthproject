@@ -60,7 +60,11 @@ class LiveTrackingProvider extends ChangeNotifier {
         return;
       }
 
-      await _service.initializeCamera();
+      if (_service.isInitialized && _service.hasCameraIssue) {
+        await _service.reinitializeCamera();
+      } else {
+        await _service.initializeCamera();
+      }
       _isCameraReady = _service.isInitialized;
       notifyListeners();
     } catch (e) {
@@ -92,6 +96,19 @@ class LiveTrackingProvider extends ChangeNotifier {
 
     _isTracking = true;
     _errorMessage = null;
+
+    if (!kIsWeb && _service.hasCameraIssue) {
+      try {
+        await _service.reinitializeCamera();
+        _isCameraReady = _service.isInitialized;
+      } catch (e) {
+        _isTracking = false;
+        _errorMessage = 'Camera refresh failed: $e';
+        notifyListeners();
+        return;
+      }
+    }
+
     _service.setExerciseType(exerciseName);
     _selectedExercise = exerciseName;
     _latest = _latest.copyWith(

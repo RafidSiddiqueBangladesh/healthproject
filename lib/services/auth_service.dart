@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AuthResult {
   const AuthResult({required this.success, required this.message});
@@ -123,9 +124,38 @@ class AuthService {
 
       final redirectTo = kIsWeb ? _webRedirectUrl : _mobileRedirectUrl;
 
+      // Keep Google OAuth inside the app on Android by using an in-app web view.
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android && provider == OAuthProvider.google) {
+        final res = await Supabase.instance.client.auth.getOAuthSignInUrl(
+          provider: provider,
+          redirectTo: redirectTo,
+        );
+        final uri = Uri.parse(res.url);
+
+        var launched = await launchUrl(uri, mode: LaunchMode.inAppWebView);
+        if (!launched) {
+          launched = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
+        }
+        if (!launched) {
+          launched = await launchUrl(uri, mode: LaunchMode.platformDefault);
+        }
+        if (!launched) {
+          return const AuthResult(
+            success: false,
+            message: 'Could not open Google sign-in screen.',
+          );
+        }
+
+        return const AuthResult(
+          success: true,
+          message: 'Continue Google sign-in in the in-app browser and return automatically.',
+        );
+      }
+
       await Supabase.instance.client.auth.signInWithOAuth(
         provider,
         redirectTo: redirectTo,
+        authScreenLaunchMode: LaunchMode.inAppWebView,
       );
       final providerName = provider.name[0].toUpperCase() + provider.name.substring(1);
       return AuthResult(

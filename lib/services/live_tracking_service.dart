@@ -17,15 +17,26 @@ class LiveTrackingService {
   double _lastShoulderWidth = 0;
   double _lastHandHeight = 0;
   bool _repDownPhase = false;
+  int _lastRepTimestampMs = 0;
   String _exerciseName = 'Push-ups';
+  
+  // Fallback to compatibility mode after consecutive empty pose frames
+  int _noPoseFrames = 0;
+  bool _liveCompatModeTried = false;
 
   CameraController? _cameraController;
-  late final FaceDetector _faceDetector;
-  late final PoseDetector _poseDetector;
+  FaceDetector? _faceDetector;
+  PoseDetector? _poseDetector;
 
   Stream<TrackingResult> get trackingStream => _controller.stream;
   CameraController? get cameraController => _cameraController;
   bool get isInitialized => _isInitialized;
+  bool get hasCameraIssue {
+    final camera = _cameraController;
+    if (camera == null) return true;
+    final value = camera.value;
+    return !value.isInitialized || value.hasError;
+  }
 
   void setExerciseType(String exerciseName) {
     final normalized = exerciseName.trim().isEmpty ? 'Push-ups' : exerciseName;
@@ -37,6 +48,9 @@ class LiveTrackingService {
     _repDownPhase = false;
     _lastShoulderWidth = 0;
     _lastHandHeight = 0;
+    _lastRepTimestampMs = 0;
+    _noPoseFrames = 0;
+    _liveCompatModeTried = false;
   }
 
   Future<void> initializeCamera() async {
@@ -73,9 +87,35 @@ class LiveTrackingService {
     _isInitialized = true;
   }
 
+  Future<void> reinitializeCamera() async {
+    await stop();
+    try {
+      await _faceDetector?.close();
+    } catch (_) {}
+    try {
+      await _poseDetector?.close();
+    } catch (_) {}
+    await _cameraController?.dispose();
+
+    _cameraController = null;
+    _faceDetector = null;
+    _poseDetector = null;
+    _isInitialized = false;
+    _isProcessingFrame = false;
+    _noPoseFrames = 0;
+    _liveCompatModeTried = false;
+
+    await initializeCamera();
+  }
+
   Future<void> start({String exerciseName = 'Push-ups'}) async {
     setExerciseType(exerciseName);
-    await initializeCamera();
+    if (!_isInitialized || hasCameraIssue) {
+      await reinitializeCamera();
+    } else {
+      await stop();
+      _isProcessingFrame = false;
+    }
     if (_cameraController == null) {
       return;
     }
@@ -97,13 +137,20 @@ class LiveTrackingService {
 
     _isProcessingFrame = true;
     try {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
       final inputImage = buildInputImage(_cameraController, cameraImage);
       if (inputImage == null) {
         return;
       }
 
-      final faces = await _faceDetector.processImage(inputImage);
-      final poses = await _poseDetector.processImage(inputImage);
+      final faceDetector = _faceDetector;
+      final poseDetector = _poseDetector;
+      if (faceDetector == null || poseDetector == null) {
+        return;
+      }
+
+      final faces = await faceDetector.processImage(inputImage);
+      final poses = await poseDetector.processImage(inputImage);
 
       final faceDetected = faces.isNotEmpty;
       final emotion = _inferEmotion(faces);
@@ -113,47 +160,80 @@ class LiveTrackingService {
       double formScore = 0;
       String exerciseFeedback = 'Keep your body fully visible in camera frame.';
 
+      // Handle empty poses with fallback to single-frame compatibility mode
+      if (poses.isEmpty) {
+        _noPoseFrames += 1;
+        
+        if (_noPoseFrames > 20 && !_liveCompatModeTried) {
+          _liveCompatModeTried = true;
+          try {
+            await _poseDetector?.close();
+            _poseDetector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.single));
+          } catch (_) {}
+        }
+        
+        // Emit result with current state
+        _controller.add(
+          TrackingResult(
+            faceDetected: faceDetected,
+            emotion: emotion,
+            shoulderActive: shoulderActive,
+            handActive: handActive,
+            formScore: formScore,
+            repCount: _repCount,
+            exerciseName: _exerciseName,
+            exerciseFeedback: exerciseFeedback,
+          ),
+        );
+        return;
+      }
+      
+      _noPoseFrames = 0;  // Reset counter on successful pose detection
+      
       if (poses.isNotEmpty) {
         final pose = poses.first;
-        final leftShoulder = pose.landmarks[PoseLandmarkType.leftShoulder];
-        final rightShoulder = pose.landmarks[PoseLandmarkType.rightShoulder];
-        final leftWrist = pose.landmarks[PoseLandmarkType.leftWrist];
-        final rightWrist = pose.landmarks[PoseLandmarkType.rightWrist];
-        final leftElbow = pose.landmarks[PoseLandmarkType.leftElbow];
-        final rightElbow = pose.landmarks[PoseLandmarkType.rightElbow];
-        final leftHip = pose.landmarks[PoseLandmarkType.leftHip];
-        final rightHip = pose.landmarks[PoseLandmarkType.rightHip];
-        final leftKnee = pose.landmarks[PoseLandmarkType.leftKnee];
-        final rightKnee = pose.landmarks[PoseLandmarkType.rightKnee];
-        final leftAnkle = pose.landmarks[PoseLandmarkType.leftAnkle];
-        final rightAnkle = pose.landmarks[PoseLandmarkType.rightAnkle];
+        final leftShoulder = _reliableLandmark(pose.landmarks[PoseLandmarkType.leftShoulder], min: 0.35);
+        final rightShoulder = _reliableLandmark(pose.landmarks[PoseLandmarkType.rightShoulder], min: 0.35);
+        final leftWrist = _reliableLandmark(pose.landmarks[PoseLandmarkType.leftWrist], min: 0.20);
+        final rightWrist = _reliableLandmark(pose.landmarks[PoseLandmarkType.rightWrist], min: 0.20);
+        final leftElbow = _reliableLandmark(pose.landmarks[PoseLandmarkType.leftElbow], min: 0.20);
+        final rightElbow = _reliableLandmark(pose.landmarks[PoseLandmarkType.rightElbow], min: 0.20);
+        final leftHip = _reliableLandmark(pose.landmarks[PoseLandmarkType.leftHip], min: 0.25);
+        final rightHip = _reliableLandmark(pose.landmarks[PoseLandmarkType.rightHip], min: 0.25);
+        final leftKnee = _reliableLandmark(pose.landmarks[PoseLandmarkType.leftKnee], min: 0.25);
+        final rightKnee = _reliableLandmark(pose.landmarks[PoseLandmarkType.rightKnee], min: 0.25);
+        final leftAnkle = _reliableLandmark(pose.landmarks[PoseLandmarkType.leftAnkle], min: 0.20);
+        final rightAnkle = _reliableLandmark(pose.landmarks[PoseLandmarkType.rightAnkle], min: 0.20);
+
+        final visibleCorePoints = <PoseLandmark?>[
+          leftShoulder,
+          rightShoulder,
+          leftElbow,
+          rightElbow,
+          leftWrist,
+          rightWrist,
+          leftHip,
+          rightHip,
+          leftKnee,
+          rightKnee,
+          leftAnkle,
+          rightAnkle,
+        ].where((p) => p != null).length;
+        final poseCoverageScore = (visibleCorePoints / 12.0).clamp(0.0, 1.0);
+        // Keep progress bar responsive even when only part of body is visible.
+        formScore = (poseCoverageScore * 0.55).clamp(0.0, 1.0);
 
         if (leftShoulder != null && rightShoulder != null) {
           final shoulderWidth = (leftShoulder.x - rightShoulder.x).abs();
-          shoulderActive = (shoulderWidth - _lastShoulderWidth).abs() > 4.8;
+          // Normalized threshold: 3.8% frame width movement
+          shoulderActive = _lastShoulderWidth > 0 && (shoulderWidth - _lastShoulderWidth).abs() > 0.038;
           _lastShoulderWidth = shoulderWidth;
         }
 
         if (leftWrist != null && rightWrist != null) {
           final handHeight = ((leftWrist.y + rightWrist.y) / 2.0);
-          handActive = (_lastHandHeight - handHeight).abs() > 5.4;
-
-          if (leftShoulder != null && rightShoulder != null) {
-            final shoulderY = (leftShoulder.y + rightShoulder.y) / 2.0;
-            final delta = handHeight - shoulderY;
-
-            if (delta > 42) {
-              _repDownPhase = true;
-            }
-            if (_repDownPhase && delta < 10) {
-              _repCount += 1;
-              _repDownPhase = false;
-            }
-
-            final shoulderSymmetry = 1 - ((leftShoulder.y - rightShoulder.y).abs() / 70).clamp(0.0, 1.0);
-            final handBalance = 1 - ((leftWrist.y - rightWrist.y).abs() / 90).clamp(0.0, 1.0);
-            formScore = ((shoulderSymmetry * 0.55) + (handBalance * 0.45)).clamp(0.0, 1.0);
-          }
+          // Normalized threshold: 4% frame height movement
+          handActive = _lastHandHeight > 0 && (_lastHandHeight - handHeight).abs() > 0.04;
           _lastHandHeight = handHeight;
         }
 
@@ -161,23 +241,38 @@ class LiveTrackingService {
         if (normalized.contains('squat')) {
           final leftKneeAngle = _angle(leftHip, leftKnee, leftAnkle);
           final rightKneeAngle = _angle(rightHip, rightKnee, rightAnkle);
-          final kneeAngle = _average(leftKneeAngle, rightKneeAngle);
+          var kneeAngle = _average(leftKneeAngle, rightKneeAngle);
+          
+          // Fallback: if average is null, use whichever knee is available
+          if (kneeAngle == null && leftKneeAngle != null) {
+            kneeAngle = leftKneeAngle;
+          } else if (kneeAngle == null && rightKneeAngle != null) {
+            kneeAngle = rightKneeAngle;
+          }
 
           if (kneeAngle != null) {
-            // More conservative: increased threshold from 100 to 110, require more extension
-            if (kneeAngle < 110) {
+            // Squat thresholds: < 115° down (more lenient), > 150° up (lowered)
+            if (kneeAngle < 115) {
               _repDownPhase = true;
             }
-            if (_repDownPhase && kneeAngle > 165) {
-              _repCount += 1;
+            if (_repDownPhase && kneeAngle > 150) {
+              if (nowMs - _lastRepTimestampMs > 750) {
+                _repCount += 1;
+                _lastRepTimestampMs = nowMs;
+              }
               _repDownPhase = false;
             }
-            final squatDepth = ((165 - kneeAngle) / 75).clamp(0.0, 1.0);
-            final kneeSymmetry = 1 - (((leftKnee?.y ?? 0) - (rightKnee?.y ?? 0)).abs() / 100).clamp(0.0, 1.0);
-            formScore = ((squatDepth * 0.65) + (kneeSymmetry * 0.35)).clamp(0.0, 1.0);
-            exerciseFeedback = kneeAngle < 115
+            final squatDepth = ((160 - kneeAngle) / 70).clamp(0.0, 1.0);
+            // Normalize knee symmetry: use normalized delta (0.0-1.0 coords) * 2x multiplier for score spread
+            final kneeDelta = ((leftKnee?.y ?? 0) - (rightKnee?.y ?? 0)).abs();
+            final kneeSymmetry = 1 - (kneeDelta * 2.0).clamp(0.0, 1.0);
+            final squatScore = ((squatDepth * 0.65) + (kneeSymmetry * 0.35)).clamp(0.0, 1.0).toDouble();
+            formScore = max(formScore, squatScore);
+            exerciseFeedback = kneeAngle < 125
                 ? 'Great squat depth. Drive up through your heels.'
                 : 'Go lower by bending knees and pushing hips back.';
+          } else {
+            exerciseFeedback = 'Keep knees and ankles in frame for better squat matching.';
           }
         } else if (normalized.contains('jump')) {
           final shoulderWidth = _distance(leftShoulder, rightShoulder);
@@ -185,45 +280,63 @@ class LiveTrackingService {
           final shoulderY = _averageValue(leftShoulder?.y, rightShoulder?.y);
           final wristY = _averageValue(leftWrist?.y, rightWrist?.y);
 
-          final armsUp = shoulderY != null && wristY != null ? wristY < (shoulderY - 20) : false;
+          final armsUp = shoulderY != null && wristY != null ? wristY < (shoulderY - 0.20) : false;
           final legsOpen = shoulderWidth != null && ankleWidth != null ? ankleWidth > (shoulderWidth * 1.55) : false;
 
           if (armsUp && legsOpen) {
             _repDownPhase = true;
           }
           if (_repDownPhase && !armsUp && !legsOpen) {
-            _repCount += 1;
+            if (nowMs - _lastRepTimestampMs > 750) {
+              _repCount += 1;
+              _lastRepTimestampMs = nowMs;
+            }
             _repDownPhase = false;
           }
 
           final armsScore = armsUp ? 1.0 : 0.35;
           final legsScore = legsOpen ? 1.0 : 0.35;
-          formScore = ((armsScore + legsScore) / 2).clamp(0.0, 1.0);
+          final jackScore = ((armsScore + legsScore) / 2).clamp(0.0, 1.0).toDouble();
+          formScore = max(formScore, jackScore);
           exerciseFeedback = (armsUp && legsOpen)
               ? 'Perfect star position. Bring arms down and feet together to complete rep.'
               : 'Open arms above shoulders and spread feet wider.';
         } else {
           final leftElbowAngle = _angle(leftShoulder, leftElbow, leftWrist);
           final rightElbowAngle = _angle(rightShoulder, rightElbow, rightWrist);
-          final elbowAngle = _average(leftElbowAngle, rightElbowAngle);
+          var elbowAngle = _average(leftElbowAngle, rightElbowAngle);
+          
+          // Fallback: if average is null, use whichever arm is available
+          if (elbowAngle == null && leftElbowAngle != null) {
+            elbowAngle = leftElbowAngle;
+          } else if (elbowAngle == null && rightElbowAngle != null) {
+            elbowAngle = rightElbowAngle;
+          }
+          
           final bodyLine = _angle(leftShoulder, leftHip, leftAnkle);
 
           if (elbowAngle != null) {
-            // More conservative: increased threshold from 98 to 105, require more extension
-            if (elbowAngle < 105) {
+            // Push-ups: < 110° is down (more lenient), > 140° is extended (lowered threshold)
+            if (elbowAngle < 110) {
               _repDownPhase = true;
             }
-            if (_repDownPhase && elbowAngle > 160) {
-              _repCount += 1;
+            if (_repDownPhase && elbowAngle > 140) {
+              if (nowMs - _lastRepTimestampMs > 750) {
+                _repCount += 1;
+                _lastRepTimestampMs = nowMs;
+              }
               _repDownPhase = false;
             }
 
-            final pushDepth = ((160 - elbowAngle) / 75).clamp(0.0, 1.0);
+            final pushDepth = ((155 - elbowAngle) / 75).clamp(0.0, 1.0);
             final plankScore = bodyLine == null ? 0.5 : (1 - ((180 - bodyLine).abs() / 70)).clamp(0.0, 1.0);
-            formScore = ((pushDepth * 0.65) + (plankScore * 0.35)).clamp(0.0, 1.0);
-            exerciseFeedback = elbowAngle < 110
+            final pushScore = ((pushDepth * 0.65) + (plankScore * 0.35)).clamp(0.0, 1.0).toDouble();
+            formScore = max(formScore, pushScore);
+            exerciseFeedback = elbowAngle < 105
                 ? 'Good push depth. Keep core tight and push up fully.'
                 : 'Lower chest more and keep elbows controlled.';
+          } else {
+            exerciseFeedback = 'Keep shoulders, elbows, and wrists fully visible for push-up matching.';
           }
         }
       }
@@ -241,6 +354,15 @@ class LiveTrackingService {
         ),
       );
     } catch (_) {
+      // Attempt fallback to compatibility mode on error
+      if (!_liveCompatModeTried) {
+        _liveCompatModeTried = true;
+        try {
+          await _poseDetector?.close();
+          _poseDetector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.single));
+        } catch (_) {}
+      }
+      
       _controller.add(
         TrackingResult(
           faceDetected: false,
@@ -280,6 +402,13 @@ class LiveTrackingService {
       return null;
     }
     return sqrt(((a.x - b.x) * (a.x - b.x)) + ((a.y - b.y) * (a.y - b.y)));
+  }
+
+  PoseLandmark? _reliableLandmark(PoseLandmark? landmark, {double min = 0.5}) {
+    if (landmark == null) {
+      return null;
+    }
+    return landmark.likelihood >= min ? landmark : null;
   }
 
   double? _angle(PoseLandmark? a, PoseLandmark? b, PoseLandmark? c) {
@@ -337,11 +466,13 @@ class LiveTrackingService {
   Future<void> dispose() async {
     await stop();
     if (_isInitialized) {
-      await _faceDetector.close();
-      await _poseDetector.close();
+      await _faceDetector?.close();
+      await _poseDetector?.close();
     }
     await _cameraController?.dispose();
     _cameraController = null;
+    _faceDetector = null;
+    _poseDetector = null;
     _isInitialized = false;
     _controller.close();
   }

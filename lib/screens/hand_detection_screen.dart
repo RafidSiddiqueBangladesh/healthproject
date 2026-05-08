@@ -35,6 +35,8 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
   String _status = 'Initializing camera...';
   bool _isSavingResult = false;
   String _saveFeedback = '';
+  int _noPoseFrames = 0;
+  bool _handFallbackTried = false;
 
   Future<void> _saveCurrentResult() async {
     if (_isSavingResult) return;
@@ -188,15 +190,28 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
       }
       final poses = await _poseDetector!.processImage(input);
       if (poses.isEmpty) {
+        _noPoseFrames += 1;
+
+        if (_noPoseFrames > 20 && !_handFallbackTried) {
+          _handFallbackTried = true;
+          await _poseDetector?.close();
+          _poseDetector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.single));
+        }
+
         if (mounted) {
           setState(() {
             _leftHand = false;
             _rightHand = false;
             _missing = const ['left hand', 'right hand'];
+            _status = _handFallbackTried
+                ? 'No pose landmarks detected. Compatibility mode active.'
+                : 'No pose landmarks detected. Keep upper body visible.';
           });
         }
         return;
       }
+
+      _noPoseFrames = 0;
 
       final p = poses.first;
       final leftWrist = p.landmarks[PoseLandmarkType.leftWrist];
@@ -209,9 +224,20 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
       final rightPinky = p.landmarks[PoseLandmarkType.rightPinky];
 
       final missing = <String>[];
-      // Detect hand only if wrist exists AND has valid position (not at frame edges)
-      bool leftHand = leftWrist != null && leftWrist.x > 10 && leftWrist.y > 10;
-      bool rightHand = rightWrist != null && rightWrist.x > 10 && rightWrist.y > 10;
+      bool leftHand = leftWrist != null && leftWrist.likelihood > 0.55;
+      bool rightHand = rightWrist != null && rightWrist.likelihood > 0.55;
+
+      // Reduce false positives where both wrists collapse to nearly same point.
+      if (leftHand && rightHand) {
+        final wristDist = (leftWrist!.x - rightWrist!.x).abs() + (leftWrist.y - rightWrist.y).abs();
+        if (wristDist < 0.10) {
+          if (leftWrist.likelihood >= rightWrist.likelihood) {
+            rightHand = false;
+          } else {
+            leftHand = false;
+          }
+        }
+      }
 
       if (!leftHand) missing.add('left hand');
       if (!rightHand) missing.add('right hand');
@@ -227,6 +253,7 @@ class _HandDetectionScreenState extends State<HandDetectionScreen> {
           _leftHand = leftHand;
           _rightHand = rightHand;
           _missing = missing;
+          _status = 'pose=${poses.length} leftLik=${leftWrist?.likelihood.toStringAsFixed(2) ?? '-'} rightLik=${rightWrist?.likelihood.toStringAsFixed(2) ?? '-'}';
         });
       }
     } catch (e) {

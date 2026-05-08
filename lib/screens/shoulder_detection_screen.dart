@@ -34,11 +34,13 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
   bool _movement = false;
   double? _lastLeftY;
   double? _lastRightY;
+  bool _shoulderYInitialized = false;  // Track first initialization
   String _status = 'Initializing camera...';
   bool _isSavingResult = false;
   String _saveFeedback = '';
   bool _shoulderCompatMode = false;
   bool _shoulderFallbackTried = false;
+  int _noPoseFrames = 0;
 
   Future<void> _saveCurrentResult() async {
     if (_isSavingResult) return;
@@ -192,6 +194,15 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
       }
       final poses = await _poseDetector!.processImage(input);
       if (poses.isEmpty) {
+        _noPoseFrames += 1;
+
+        if (_noPoseFrames > 20 && !_shoulderFallbackTried) {
+          _shoulderFallbackTried = true;
+          await _poseDetector?.close();
+          _poseDetector = PoseDetector(options: PoseDetectorOptions(mode: PoseDetectionMode.single));
+          _shoulderCompatMode = true;
+        }
+
         if (mounted) {
           setState(() {
             _leftShoulder = false;
@@ -205,29 +216,46 @@ class _ShoulderDetectionScreenState extends State<ShoulderDetectionScreen> {
         return;
       }
 
+      _noPoseFrames = 0;
+
       final p = poses.first;
       final left = p.landmarks[PoseLandmarkType.leftShoulder];
       final right = p.landmarks[PoseLandmarkType.rightShoulder];
+      final leftReliable = left != null && left.likelihood > 0.55;
+      final rightReliable = right != null && right.likelihood > 0.55;
 
       bool movement = false;
-      if (left != null && _lastLeftY != null && (left.y - _lastLeftY!).abs() > 4.5) {
-        movement = true;
+      // ML Kit returns normalized coordinates (0.0-1.0), threshold = 3.5% frame movement
+      const double movementThreshold = 0.035;
+      
+      if (leftReliable) {
+        if (_lastLeftY == null) {
+          _lastLeftY = left.y;
+        } else if (_shoulderYInitialized && (left.y - _lastLeftY!).abs() > movementThreshold) {
+          movement = true;
+        }
+        _lastLeftY = left.y;
       }
-      if (right != null && _lastRightY != null && (right.y - _lastRightY!).abs() > 4.5) {
-        movement = true;
+      if (rightReliable) {
+        if (_lastRightY == null) {
+          _lastRightY = right.y;
+        } else if (_shoulderYInitialized && (right.y - _lastRightY!).abs() > movementThreshold) {
+          movement = true;
+        }
+        _lastRightY = right.y;
       }
-
-      _lastLeftY = left?.y;
-      _lastRightY = right?.y;
+      
+      // Mark as initialized after first frame
+      if (!_shoulderYInitialized && (_lastLeftY != null || _lastRightY != null)) {
+        _shoulderYInitialized = true;
+      }
 
       if (mounted) {
         setState(() {
           _leftShoulder = left != null;
           _rightShoulder = right != null;
           _movement = movement;
-          _status = _shoulderCompatMode
-              ? 'Shoulder detection active (compatibility mode).'
-              : 'Shoulder detection active.';
+          _status = 'pose=${poses.length} leftLik=${left?.likelihood.toStringAsFixed(2) ?? '-'} rightLik=${right?.likelihood.toStringAsFixed(2) ?? '-'} movement=${_movement ? '1' : '0'}';
         });
       }
     } catch (e) {

@@ -24,6 +24,7 @@ class _LiveScreenState extends State<LiveScreen> {
   LiveTrackingProvider? _trackingProvider;
   bool _isSavingResult = false;
   String _saveFeedback = '';
+  bool _autoStartTried = false;
 
   Future<void> _saveLiveSummary(LiveTrackingProvider tracking) async {
     if (_isSavingResult) return;
@@ -74,8 +75,7 @@ class _LiveScreenState extends State<LiveScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _trackingProvider == null) return;
-      _trackingProvider!.initializeCamera();
+      _startTrackingAutomatically();
     });
   }
 
@@ -83,6 +83,22 @@ class _LiveScreenState extends State<LiveScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     _trackingProvider ??= context.read<LiveTrackingProvider>();
+  }
+
+  Future<void> _startTrackingAutomatically() async {
+    final provider = _trackingProvider;
+    if (!mounted || provider == null || _autoStartTried) {
+      return;
+    }
+    _autoStartTried = true;
+    await provider.initializeCamera();
+    if (!mounted) return;
+    if (!provider.isTracking) {
+      await provider.startTracking(exerciseName: _selectedExercise);
+    }
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -179,6 +195,9 @@ class _LiveScreenState extends State<LiveScreen> {
                           _selectedExercise = value;
                         });
                         context.read<LiveTrackingProvider>().updateExerciseSelection(value);
+                          if (context.read<LiveTrackingProvider>().isTracking) {
+                            context.read<LiveTrackingProvider>().startTracking(exerciseName: value);
+                          }
                       },
                       decoration: const InputDecoration(
                         labelText: 'Exercise For Matching Guide',
@@ -213,7 +232,7 @@ class _LiveScreenState extends State<LiveScreen> {
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'Form Score: ${(tracking.latest.formScore * 100).toStringAsFixed(0)}%',
+                      'Match Score: ${(tracking.latest.formScore * 100).toStringAsFixed(0)}%',
                       style: const TextStyle(fontSize: 16, color: Colors.white),
                     ),
                     const SizedBox(height: 6),
